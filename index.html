@@ -328,6 +328,13 @@
     width: 90px;
   }
   .color-row input:focus { outline: none; border-color: var(--accent); }
+  tr.pos-total td { font-weight: 600; border-top: 1px solid var(--border); }
+  tr.pos-sub td:first-child {
+    padding-left: 28px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  tr.pos-sub td { color: var(--muted); }
   a.subtle { color: var(--muted); text-decoration: none; }
   a.subtle:hover { color: var(--accent); }
   footer {
@@ -952,25 +959,39 @@ function renderStats() {
       )),
     );
     const ptbody = el("tbody", {});
-    ["QB", "RB", "WR", "TE"]
-      .map(pos => ({ pos, t: tally(posPicks.filter(p => p.pos === pos)) }))
-      .filter(r => r.t.total > 0)
-      .sort((a, b) => (b.t.graded ? b.t.hit / b.t.graded : 0) - (a.t.graded ? a.t.hit / a.t.graded : 0))
-      .forEach(({ pos, t }) => {
-        ptbody.appendChild(el("tr", {},
-          el("td", {},
-            el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
-            pos
-          ),
-          el("td", { class: "num" }, String(t.total)),
-          el("td", { class: "num tight" }, String(t.hit)),
-          el("td", { class: "num tight" }, String(t.meh)),
-          el("td", { class: "num tight" }, String(t.miss)),
-          el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
-          el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
-          el("td", {}, renderBar(t)),
+
+    function statCells(t) {
+      return [
+        el("td", { class: "num" }, String(t.total)),
+        el("td", { class: "num tight" }, String(t.hit)),
+        el("td", { class: "num tight" }, String(t.meh)),
+        el("td", { class: "num tight" }, String(t.miss)),
+        el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
+        el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
+        el("td", {}, renderBar(t)),
+      ];
+    }
+
+    ["QB", "RB", "WR", "TE"].forEach(pos => {
+      const all = posPicks.filter(p => p.pos === pos);
+      if (!all.length) return;
+      ptbody.appendChild(el("tr", { class: "pos-total" },
+        el("td", {},
+          el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
+          pos + " — Total"
+        ),
+        ...statCells(tally(all)),
+      ));
+      [1, 2, 3].forEach(rd => {
+        const sub = all.filter(p => p.round === rd);
+        if (!sub.length) return;
+        ptbody.appendChild(el("tr", { class: "pos-sub" },
+          el("td", {}, "Round " + rd),
+          ...statCells(tally(sub)),
         ));
       });
+    });
+
     posTable.appendChild(ptbody);
     posCard.appendChild(posTable);
   }

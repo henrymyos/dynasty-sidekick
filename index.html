@@ -728,9 +728,6 @@ function renderLeaderboard() {
   const table = el("table", {},
     el("thead", {}, el("tr", {},
       el("th", {}, "Drafter"),
-      el("th", { class: "num" }, "R1"),
-      el("th", { class: "num" }, "R2"),
-      el("th", { class: "num" }, "R3"),
       el("th", { class: "num" }, "Picks"),
       el("th", { class: "num" }, "Hit"),
       el("th", { class: "num" }, "Meh"),
@@ -744,15 +741,12 @@ function renderLeaderboard() {
   const ranked = state.people
     .map(p => {
       const all = state.picks.filter(x => x.person === p);
-      const r1 = all.filter(x => x.round === 1).length;
-      const r2 = all.filter(x => x.round === 2).length;
-      const r3 = all.filter(x => x.round === 3).length;
       const scoped = state.leaderboardRound == null
         ? all
         : all.filter(x => x.round === state.leaderboardRound);
       const t = tally(scoped);
       return {
-        person: p, t, r1, r2, r3,
+        person: p, t,
         hitPct: t.graded ? t.hit / t.graded : -1,
         hmPct: t.graded ? (t.hit + t.meh) / t.graded : -1,
       };
@@ -767,9 +761,6 @@ function renderLeaderboard() {
       onclick: () => { state.view = "person"; state.selectedPerson = r.person; setActiveTab("person"); render(); }
     },
       el("td", {}, r.person),
-      el("td", { class: "num" }, String(r.r1)),
-      el("td", { class: "num" }, String(r.r2)),
-      el("td", { class: "num" }, String(r.r3)),
       el("td", { class: "num" }, String(r.t.total)),
       el("td", { class: "num" }, String(r.t.hit)),
       el("td", { class: "num" }, String(r.t.meh)),

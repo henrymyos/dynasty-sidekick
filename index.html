@@ -299,6 +299,35 @@
     padding: 40px 20px;
     font-style: italic;
   }
+  .swatch {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.1);
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  .color-row {
+    display: grid;
+    grid-template-columns: 28px 110px 1fr;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+  }
+  .color-row:hover { background: var(--panel-2); }
+  .color-row input {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    width: 90px;
+  }
+  .color-row input:focus { outline: none; border-color: var(--accent); }
   a.subtle { color: var(--muted); text-decoration: none; }
   a.subtle:hover { color: var(--accent); }
   footer {
@@ -326,6 +355,7 @@
     <button data-view="year">By Year</button>
     <button data-view="person">By Person</button>
     <button data-view="leaderboard">Leaderboard</button>
+    <button data-view="stats">Stats</button>
   </nav>
 </header>
 <main id="main">
@@ -336,15 +366,15 @@
   Auto-refreshes every 60 seconds.
 </footer>
 <script>
-const SHEET_ID = "116MXUbHLTCDdSgVx5dZZYW0lydVyAN0rkeItdq-U7Bo";
-const GID = "0";
 const REFRESH_MS = 60_000;
-const CALLBACK_NAME = "gvizCallback";
+const POS_MAP_KEY = "draftpicks.posMap.v1";
 
 let state = {
-  picks: [],          // {year, round, person, player, result}
+  picks: [],          // {year, round, person, player, result, color}
   years: [],
   people: [],
+  colors: [],         // unique non-white hex colors found on player cells
+  posMap: loadPosMap(),  // { "#rrggbb": "QB" | "RB" | ... }
   view: "overview",
   selectedYear: null,
   selectedPerson: null,
@@ -352,7 +382,25 @@ let state = {
   overviewSort: { col: "year", dir: "asc" },
   leaderboardSort: { col: "hitPct", dir: "desc" },
   leaderboardRound: null,
+  statsRound: null,
 };
+
+function loadPosMap() {
+  try { return JSON.parse(localStorage.getItem(POS_MAP_KEY)) || {}; }
+  catch { return {}; }
+}
+function savePosMap() {
+  try { localStorage.setItem(POS_MAP_KEY, JSON.stringify(state.posMap)); } catch {}
+}
+
+function rgbToHex(bg) {
+  if (!bg) return null;
+  const r = Math.round((bg.red || 0) * 255);
+  const g = Math.round((bg.green || 0) * 255);
+  const b = Math.round((bg.blue || 0) * 255);
+  if (r >= 248 && g >= 248 && b >= 248) return null;  // treat white-ish as no color
+  return "#" + [r, g, b].map(x => x.toString(16).padStart(2, "0")).join("");
+}
 
 function toggleSort(sortState, col) {
   if (sortState.col === col) {
@@ -372,25 +420,25 @@ function sortHeader(label, col, sortState, onClick, extraClass) {
   }, label, arrow ? el("span", { class: "arrow" }, arrow) : "");
 }
 
-function gvizTableToRows(table) {
-  if (!table || !table.rows) return [];
-  const numCols = (table.cols || []).length;
-  return table.rows.map(r => {
-    const out = [];
-    for (let i = 0; i < numCols; i++) {
-      const c = r.c && r.c[i];
-      out.push(c && c.v != null ? String(c.v) : "");
-    }
-    return out;
-  });
+function cellVal(rows, r, c) {
+  const row = rows[r];
+  if (!row) return "";
+  const cell = row[c];
+  return cell ? (cell.v || "") : "";
+}
+function cellColor(rows, r, c) {
+  const row = rows[r];
+  if (!row) return null;
+  const cell = row[c];
+  return cell ? rgbToHex(cell.bg) : null;
 }
 
 function extractPicks(rows) {
-  // Find year headers: row[col] matches /^(\d{4}) Draft$/
-  const yearHeaders = []; // {year, row, col}
-  rows.forEach((r, ri) => {
-    r.forEach((cell, ci) => {
-      const m = (cell || "").trim().match(/^(\d{4}) Draft$/);
+  // Find year headers: cellVal matches /^(\d{4}) Draft$/
+  const yearHeaders = [];
+  rows.forEach((row, ri) => {
+    row.forEach((cell, ci) => {
+      const m = ((cell && cell.v) || "").trim().match(/^(\d{4}) Draft$/);
       if (m) yearHeaders.push({ year: parseInt(m[1], 10), row: ri, col: ci });
     });
   });
@@ -399,24 +447,23 @@ function extractPicks(rows) {
   const picks = [];
   yearHeaders.forEach((yh, idx) => {
     const endRow = idx + 1 < yearHeaders.length ? yearHeaders[idx + 1].row : rows.length;
-    const yearCol = yh.col;        // round labels live here
+    const yearCol = yh.col;
     const personCol = yearCol - 1;
     const playerCol = yearCol;
     const resultCol = yearCol + 1;
     let currentRound = null;
     let pickInRound = 0;
     for (let r = yh.row + 1; r < endRow; r++) {
-      const row = rows[r] || [];
-      const yearColVal = (row[yearCol] || "").trim();
+      const yearColVal = cellVal(rows, r, yearCol).trim();
       const roundMatch = yearColVal.match(/^Round\s*(\d+)$/i);
       if (roundMatch) {
         currentRound = parseInt(roundMatch[1], 10);
         pickInRound = 0;
         continue;
       }
-      const person = (row[personCol] || "").trim();
-      const player = (row[playerCol] || "").trim();
-      const result = (row[resultCol] || "").trim();
+      const person = cellVal(rows, r, personCol).trim();
+      const player = cellVal(rows, r, playerCol).trim();
+      const result = cellVal(rows, r, resultCol).trim();
       if (!person) continue;
       if (/^Round\s*\d+$/i.test(person)) continue;
       if (/^Round\s*\d+$/i.test(player)) continue;
@@ -431,6 +478,7 @@ function extractPicks(rows) {
         person: person === "Me" ? "Henry" : person,
         player: player || null,
         result: normalizeResult(result),
+        color: cellColor(rows, r, playerCol),
       });
     }
   });
@@ -778,6 +826,178 @@ function renderLeaderboard() {
   main.appendChild(card);
 }
 
+function renderStats() {
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+
+  // ----- Round filter -----
+  const controls = el("div", { class: "controls" });
+  const roundOpts = [
+    { value: null, label: "All Rounds" },
+    { value: 1, label: "Round 1 only" },
+    { value: 2, label: "Round 2 only" },
+    { value: 3, label: "Round 3 only" },
+  ];
+  controls.appendChild(customSelect(roundOpts, state.statsRound, v => {
+    state.statsRound = v;
+    render();
+  }));
+  main.appendChild(controls);
+
+  const filterPicks = (picks) => state.statsRound == null
+    ? picks
+    : picks.filter(p => p.round === state.statsRound);
+
+  // ----- All-time round breakdown -----
+  const roundCard = el("div", { class: "card" }, el("h2", {}, "By Round (all years)"));
+  const roundTable = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", {}, "Round"),
+      el("th", { class: "num" }, "Picks"),
+      el("th", { class: "num tight" }, "Hit"),
+      el("th", { class: "num tight" }, "Meh"),
+      el("th", { class: "num tight" }, "Miss"),
+      el("th", { class: "num tight gap-left" }, "Hit %"),
+      el("th", { class: "num tight" }, "Hit + Meh"),
+      el("th", {}, "Mix"),
+    )),
+  );
+  const rtbody = el("tbody", {});
+  [1, 2, 3].forEach(rd => {
+    if (state.statsRound != null && state.statsRound !== rd) return;
+    const t = tally(state.picks.filter(p => p.round === rd));
+    rtbody.appendChild(el("tr", {},
+      el("td", {}, "Round " + rd),
+      el("td", { class: "num" }, String(t.total)),
+      el("td", { class: "num tight" }, String(t.hit)),
+      el("td", { class: "num tight" }, String(t.meh)),
+      el("td", { class: "num tight" }, String(t.miss)),
+      el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
+      el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
+      el("td", {}, renderBar(t)),
+    ));
+  });
+  roundTable.appendChild(rtbody);
+  roundCard.appendChild(roundTable);
+  main.appendChild(roundCard);
+
+  // ----- Year × Round matrix -----
+  const matrixCard = el("div", { class: "card" }, el("h2", {}, "Round by Year"));
+  const matrixTable = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", {}, "Year"),
+      el("th", { class: "num" }, "R1 Hit %"),
+      el("th", { class: "num" }, "R1 Hit + Meh"),
+      el("th", { class: "num gap-left" }, "R2 Hit %"),
+      el("th", { class: "num" }, "R2 Hit + Meh"),
+      el("th", { class: "num gap-left" }, "R3 Hit %"),
+      el("th", { class: "num" }, "R3 Hit + Meh"),
+    )),
+  );
+  const mtbody = el("tbody", {});
+  state.years.forEach(y => {
+    const yp = state.picks.filter(p => p.year === y);
+    const r1 = tally(yp.filter(p => p.round === 1));
+    const r2 = tally(yp.filter(p => p.round === 2));
+    const r3 = tally(yp.filter(p => p.round === 3));
+    mtbody.appendChild(el("tr", {},
+      el("td", {}, String(y)),
+      el("td", { class: "num" }, formatPct(r1.hit, r1.graded)),
+      el("td", { class: "num" }, formatPct(r1.hit + r1.meh, r1.graded)),
+      el("td", { class: "num gap-left" }, formatPct(r2.hit, r2.graded)),
+      el("td", { class: "num" }, formatPct(r2.hit + r2.meh, r2.graded)),
+      el("td", { class: "num gap-left" }, formatPct(r3.hit, r3.graded)),
+      el("td", { class: "num" }, formatPct(r3.hit + r3.meh, r3.graded)),
+    ));
+  });
+  matrixTable.appendChild(mtbody);
+  matrixCard.appendChild(matrixTable);
+  main.appendChild(matrixCard);
+
+  // ----- Color → Position mapping (saved to localStorage) -----
+  const colorsSeen = uniqueSorted(filterPicks(state.picks).map(p => p.color).filter(Boolean));
+  const mapCard = el("div", { class: "card" }, el("h2", {}, "Position colors"));
+  if (!colorsSeen.length) {
+    mapCard.appendChild(el("div", { class: "empty" },
+      "No colored cells found. Make sure the GOOGLE_API_KEY env var is set on Vercel."
+    ));
+  } else {
+    mapCard.appendChild(el("div", { class: "pct", style: "margin-bottom:10px" },
+      "Label each color (saved locally). Picks share the color of the Player cell in the sheet."
+    ));
+    colorsSeen.forEach(c => {
+      mapCard.appendChild(el("div", { class: "color-row" },
+        el("span", { class: "swatch", style: "background:" + c }),
+        el("code", { style: "color:var(--muted);font-size:12px" }, c),
+        el("input", {
+          type: "text",
+          placeholder: "Label (e.g. QB)",
+          value: state.posMap[c] || "",
+          oninput: e => {
+            const v = e.target.value.trim();
+            if (v) state.posMap[c] = v;
+            else delete state.posMap[c];
+            savePosMap();
+            // refresh just the position table — but simplest is a full re-render
+            // (debounced via blur instead of every keystroke would be nicer)
+          },
+          onblur: () => render(),
+        }),
+      ));
+    });
+  }
+  main.appendChild(mapCard);
+
+  // ----- Position breakdown -----
+  const posCard = el("div", { class: "card" }, el("h2", {}, "By Position"));
+  const posPicks = filterPicks(state.picks).filter(p => p.color);
+  if (!posPicks.length) {
+    posCard.appendChild(el("div", { class: "empty" }, "No position-colored picks in this scope."));
+  } else {
+    // Group: label if mapped, otherwise the raw color code
+    const groups = {};
+    posPicks.forEach(p => {
+      const label = state.posMap[p.color] || p.color;
+      if (!groups[label]) groups[label] = { color: p.color, picks: [] };
+      groups[label].picks.push(p);
+    });
+    const posTable = el("table", {},
+      el("thead", {}, el("tr", {},
+        el("th", {}, "Position"),
+        el("th", { class: "num" }, "Picks"),
+        el("th", { class: "num tight" }, "Hit"),
+        el("th", { class: "num tight" }, "Meh"),
+        el("th", { class: "num tight" }, "Miss"),
+        el("th", { class: "num tight gap-left" }, "Hit %"),
+        el("th", { class: "num tight" }, "Hit + Meh"),
+        el("th", {}, "Mix"),
+      )),
+    );
+    const ptbody = el("tbody", {});
+    Object.entries(groups)
+      .map(([label, g]) => ({ label, color: g.color, t: tally(g.picks) }))
+      .sort((a, b) => (b.t.graded ? b.t.hit / b.t.graded : 0) - (a.t.graded ? a.t.hit / a.t.graded : 0))
+      .forEach(({ label, color, t }) => {
+        ptbody.appendChild(el("tr", {},
+          el("td", {},
+            el("span", { class: "swatch", style: "background:" + color }),
+            label
+          ),
+          el("td", { class: "num" }, String(t.total)),
+          el("td", { class: "num tight" }, String(t.hit)),
+          el("td", { class: "num tight" }, String(t.meh)),
+          el("td", { class: "num tight" }, String(t.miss)),
+          el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
+          el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
+          el("td", {}, renderBar(t)),
+        ));
+      });
+    posTable.appendChild(ptbody);
+    posCard.appendChild(posTable);
+  }
+  main.appendChild(posCard);
+}
+
 function setActiveTab(view) {
   document.querySelectorAll("nav.tabs button").forEach(b => {
     b.classList.toggle("active", b.dataset.view === view);
@@ -793,6 +1013,7 @@ function render() {
     case "year": renderYearView(); break;
     case "person": renderPersonView(); break;
     case "leaderboard": renderLeaderboard(); break;
+    case "stats": renderStats(); break;
     default: renderOverview();
   }
 }
@@ -804,14 +1025,21 @@ function setStatus(kind, text) {
   txt.textContent = text;
 }
 
-window[CALLBACK_NAME] = function (resp) {
+async function loadData() {
+  setStatus("loading", "Refreshing…");
   try {
-    if (!resp || resp.status !== "ok") throw new Error((resp && resp.status) || "bad response");
-    const rows = gvizTableToRows(resp.table);
-    const picks = extractPicks(rows);
+    const res = await fetch("/api/sheet?_=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error("API " + res.status + ": " + detail.slice(0, 120));
+    }
+    const data = await res.json();
+    if (!data.rows) throw new Error("malformed response");
+    const picks = extractPicks(data.rows);
     state.picks = picks;
     state.years = uniqueSorted(picks.map(p => p.year));
     state.people = uniqueSorted(picks.map(p => p.person));
+    state.colors = uniqueSorted(picks.map(p => p.color).filter(Boolean));
     state.lastUpdated = new Date();
     setStatus("ok", "Updated " + state.lastUpdated.toLocaleTimeString());
     render();
@@ -819,18 +1047,6 @@ window[CALLBACK_NAME] = function (resp) {
     console.error(e);
     setStatus("error", "Failed: " + e.message);
   }
-};
-
-function loadData() {
-  setStatus("loading", "Refreshing…");
-  const old = document.getElementById("gvizScript");
-  if (old) old.remove();
-  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${GID}&tqx=responseHandler:${CALLBACK_NAME}&headers=0&_=${Date.now()}`;
-  const s = document.createElement("script");
-  s.id = "gvizScript";
-  s.src = url;
-  s.onerror = () => setStatus("error", "Failed to load sheet");
-  document.head.appendChild(s);
 }
 
 document.querySelectorAll("nav.tabs button").forEach(b => {

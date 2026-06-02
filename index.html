@@ -435,11 +435,12 @@ function toggleSort(sortState, col) {
   }
 }
 
-function sortHeader(label, col, sortState, onClick, extraClass) {
+function sortHeader(label, col, sortState, onClick, extraClass, baseClass) {
   const active = sortState.col === col;
   const arrow = active ? (sortState.dir === "asc" ? "▲" : "▼") : "";
+  const base = baseClass != null ? baseClass : "num tight";
   return el("th", {
-    class: "num tight sortable" + (active ? " active" : "") + (extraClass ? " " + extraClass : ""),
+    class: base + " sortable" + (active ? " active" : "") + (extraClass ? " " + extraClass : ""),
     onclick: onClick,
   }, label, arrow ? el("span", { class: "arrow" }, arrow) : "");
 }
@@ -804,11 +805,11 @@ function renderLeaderboard() {
   const card = el("div", { class: "card" }, el("h2", {}, title));
   const table = el("table", {},
     el("thead", {}, el("tr", {},
-      el("th", {}, "Drafter"),
-      el("th", { class: "num" }, "Picks"),
-      el("th", { class: "num tight" }, "Hit"),
-      el("th", { class: "num tight" }, "Meh"),
-      el("th", { class: "num tight" }, "Miss"),
+      sortHeader("Drafter", "person", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "person"); render(); }, null, ""),
+      sortHeader("Picks", "total", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "total"); render(); }, null, "num"),
+      sortHeader("Hit", "hit", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "hit"); render(); }),
+      sortHeader("Meh", "meh", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "meh"); render(); }),
+      sortHeader("Miss", "miss", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "miss"); render(); }),
       sortHeader("Hit %", "hitPct", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "hitPct"); render(); }, "gap-left"),
       sortHeader("Hit + Meh", "hmPct", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "hmPct"); render(); }),
       el("th", {}, "Mix"),
@@ -824,13 +825,18 @@ function renderLeaderboard() {
       const t = tally(scoped);
       return {
         person: p, t,
+        total: t.total, hit: t.hit, meh: t.meh, miss: t.miss,
         hitPct: t.graded ? t.hit / t.graded : -1,
         hmPct: t.graded ? (t.hit + t.meh) / t.graded : -1,
       };
     })
     .filter(r => r.t.graded > 0);
   const lsd = state.leaderboardSort.dir === "asc" ? 1 : -1;
-  ranked.sort((a, b) => lsd * (a[state.leaderboardSort.col] - b[state.leaderboardSort.col]));
+  const sortKey = state.leaderboardSort.col;
+  ranked.sort((a, b) => {
+    if (sortKey === "person") return lsd * a.person.localeCompare(b.person);
+    return lsd * ((a[sortKey] || 0) - (b[sortKey] || 0));
+  });
 
   ranked.forEach(r => {
     tbody.appendChild(el("tr", {

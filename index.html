@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#0d1117" />
 <title>Draft Picks Tracker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%88%3C/text%3E%3C/svg%3E">
 <style>
@@ -335,6 +336,68 @@
     font-size: 13px;
   }
   tr.pos-sub td { color: var(--muted); }
+
+  /* ---------- Mobile ---------- */
+  @media (max-width: 640px) {
+    header { padding: 10px 14px; }
+    h1 { font-size: 17px; }
+    .header-row { gap: 10px; }
+    .status { font-size: 12px; gap: 6px; }
+    button.refresh { padding: 5px 10px; font-size: 12px; }
+
+    nav.tabs {
+      margin: 12px -14px -11px;
+      padding: 0 14px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    nav.tabs::-webkit-scrollbar { display: none; }
+    nav.tabs button {
+      flex-shrink: 0;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
+    main { padding: 14px 12px 24px; }
+    .controls { gap: 8px; }
+    .custom-select { min-width: 100%; }
+    .custom-select-menu { max-height: 60vh; }
+
+    .stat-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .stat { padding: 10px 12px; }
+    .stat-label { font-size: 11px; }
+    .stat-value { font-size: 20px; }
+
+    .card { padding: 12px; overflow-x: auto; }
+    .card h2 { font-size: 15px; margin-bottom: 10px; }
+    .card h3 { font-size: 14px; }
+
+    table { font-size: 12px; }
+    th, td { padding: 8px 6px; }
+    td.tight, th.tight { padding-left: 4px; padding-right: 4px; }
+    td.gap-left, th.gap-left { padding-left: 14px; }
+
+    .pick-row {
+      grid-template-columns: 70px 1fr 56px;
+      gap: 8px;
+      padding: 7px 6px;
+      font-size: 13px;
+    }
+    .pick-row.with-slot {
+      grid-template-columns: 70px 44px 1fr 56px;
+    }
+    .pick-result { font-size: 11px; padding: 2px 6px; }
+    .round-header { font-size: 11px; }
+
+    .mobile-hide { display: none !important; }
+
+    footer { padding: 18px 12px; font-size: 11px; }
+  }
   a.subtle { color: var(--muted); text-decoration: none; }
   a.subtle:hover { color: var(--accent); }
   footer {
@@ -663,7 +726,7 @@ function renderOverview() {
       el("th", { class: "num tight" }, "Miss"),
       sortHeader("Hit %", "hitPct", state.overviewSort, () => { toggleSort(state.overviewSort, "hitPct"); render(); }, "gap-left"),
       sortHeader("Hit + Meh", "hmPct", state.overviewSort, () => { toggleSort(state.overviewSort, "hmPct"); render(); }),
-      el("th", {}, "Result"),
+      el("th", { class: "mobile-hide" }, "Result"),
     ))
   );
   const tbody = el("tbody", {});
@@ -687,7 +750,7 @@ function renderOverview() {
       el("td", { class: "num tight" }, String(t.miss)),
       el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
       el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
-      el("td", {}, renderBar(t)),
+      el("td", { class: "mobile-hide" }, renderBar(t)),
     );
     tbody.appendChild(tr);
   });
@@ -812,7 +875,7 @@ function renderLeaderboard() {
       sortHeader("Miss", "miss", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "miss"); render(); }),
       sortHeader("Hit %", "hitPct", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "hitPct"); render(); }, "gap-left"),
       sortHeader("Hit + Meh", "hmPct", state.leaderboardSort, () => { toggleSort(state.leaderboardSort, "hmPct"); render(); }),
-      el("th", {}, "Mix"),
+      el("th", { class: "mobile-hide" }, "Mix"),
     )),
   );
   const tbody = el("tbody", {});
@@ -850,7 +913,7 @@ function renderLeaderboard() {
       el("td", { class: "num tight" }, String(r.t.miss)),
       el("td", { class: "num tight gap-left" }, formatPct(r.t.hit, r.t.graded)),
       el("td", { class: "num tight" }, formatPct(r.t.hit + r.t.meh, r.t.graded)),
-      el("td", {}, renderBar(r.t)),
+      el("td", { class: "mobile-hide" }, renderBar(r.t)),
     ));
   });
   table.appendChild(tbody);
@@ -873,7 +936,7 @@ function renderStats() {
       el("th", { class: "num tight" }, "Miss"),
       el("th", { class: "num tight gap-left" }, "Hit %"),
       el("th", { class: "num tight" }, "Hit + Meh"),
-      el("th", {}, "Mix"),
+      el("th", { class: "mobile-hide" }, "Mix"),
     )),
   );
   const rtbody = el("tbody", {});
@@ -886,7 +949,7 @@ function renderStats() {
     el("td", { class: "num tight" }, String(allRounds.miss)),
     el("td", { class: "num tight gap-left" }, formatPct(allRounds.hit, allRounds.graded)),
     el("td", { class: "num tight" }, formatPct(allRounds.hit + allRounds.meh, allRounds.graded)),
-    el("td", {}, renderBar(allRounds)),
+    el("td", { class: "mobile-hide" }, renderBar(allRounds)),
   ));
   [1, 2, 3].forEach(rd => {
     const t = tally(state.picks.filter(p => p.round === rd));
@@ -898,7 +961,7 @@ function renderStats() {
       el("td", { class: "num tight" }, String(t.miss)),
       el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
       el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
-      el("td", {}, renderBar(t)),
+      el("td", { class: "mobile-hide" }, renderBar(t)),
     ));
   });
   roundTable.appendChild(rtbody);
@@ -953,7 +1016,7 @@ function renderStats() {
         el("th", { class: "num tight" }, "Miss"),
         el("th", { class: "num tight gap-left" }, "Hit %"),
         el("th", { class: "num tight" }, "Hit + Meh"),
-        el("th", {}, "Mix"),
+        el("th", { class: "mobile-hide" }, "Mix"),
       )),
     );
     const ptbody = el("tbody", {});
@@ -966,7 +1029,7 @@ function renderStats() {
         el("td", { class: "num tight" }, String(t.miss)),
         el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
         el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
-        el("td", {}, renderBar(t)),
+        el("td", { class: "mobile-hide" }, renderBar(t)),
       ];
     }
 

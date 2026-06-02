@@ -425,7 +425,7 @@ function extractPicks(rows) {
         round: currentRound,
         pickInRound,
         slot,
-        person,
+        person: person === "Me" ? "Henry" : person,
         player: player || null,
         result: normalizeResult(result),
       });

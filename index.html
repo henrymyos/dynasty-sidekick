@@ -195,6 +195,7 @@
     letter-spacing: 0.5px;
   }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.tight, th.tight { padding-left: 6px; padding-right: 6px; white-space: nowrap; width: 1%; }
   th.sortable { cursor: pointer; user-select: none; }
   th.sortable:hover { color: var(--text); }
   th.sortable .arrow { margin-left: 4px; opacity: 0.6; }
@@ -310,7 +311,7 @@ function sortHeader(label, col, sortState, onClick) {
   const active = sortState.col === col;
   const arrow = active ? (sortState.dir === "asc" ? "▲" : "▼") : "";
   return el("th", {
-    class: "num sortable" + (active ? " active" : ""),
+    class: "num tight sortable" + (active ? " active" : ""),
     onclick: onClick,
   }, label, arrow ? el("span", { class: "arrow" }, arrow) : "");
 }
@@ -497,8 +498,8 @@ function renderOverview() {
       el("td", { class: "num" }, String(t.hit)),
       el("td", { class: "num" }, String(t.meh)),
       el("td", { class: "num" }, String(t.miss)),
-      el("td", { class: "num" }, formatPct(t.hit, t.graded)),
-      el("td", { class: "num" }, formatPct(t.hit + t.meh, t.graded)),
+      el("td", { class: "num tight" }, formatPct(t.hit, t.graded)),
+      el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
       el("td", {}, renderBar(t)),
     );
     tbody.appendChild(tr);
@@ -631,8 +632,8 @@ function renderLeaderboard() {
       el("td", { class: "num" }, String(r.t.hit)),
       el("td", { class: "num" }, String(r.t.meh)),
       el("td", { class: "num" }, String(r.t.miss)),
-      el("td", { class: "num" }, formatPct(r.t.hit, r.t.graded)),
-      el("td", { class: "num" }, formatPct(r.t.hit + r.t.meh, r.t.graded)),
+      el("td", { class: "num tight" }, formatPct(r.t.hit, r.t.graded)),
+      el("td", { class: "num tight" }, formatPct(r.t.hit + r.t.meh, r.t.graded)),
       el("td", {}, renderBar(r.t)),
     ));
   });

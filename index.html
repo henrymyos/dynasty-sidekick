@@ -1966,11 +1966,20 @@ const OWNER_NAME_MERGES = {
   "QB camp": "John",
   "Elite 11 QB camp": "John",
 };
+function _normalizeOwnerKey(s) {
+  return (s || "")
+    .replace(/[‘’ʼ′`]/g, "'")
+    .trim()
+    .toLowerCase();
+}
+const _OWNER_MERGES_NORM = (() => {
+  const out = {};
+  for (const k in OWNER_NAME_MERGES) out[_normalizeOwnerKey(k)] = OWNER_NAME_MERGES[k];
+  return out;
+})();
 function canonicalOwnerName(name) {
   if (!name) return name;
-  // Normalize curly/straight apostrophes so display variants still match.
-  const normalized = name.replace(/[‘’]/g, "'");
-  return OWNER_NAME_MERGES[normalized] || OWNER_NAME_MERGES[name] || name;
+  return _OWNER_MERGES_NORM[_normalizeOwnerKey(name)] || name;
 }
 
 function rosterToOwner(season, rosterId) {

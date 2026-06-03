@@ -1788,14 +1788,24 @@ function renderStats() {
     const slotMedian = {};
     Object.entries(slotValues).forEach(([slot, vs]) => { slotMedian[slot] = median(vs); });
 
-    // Per-drafter aggregated surplus
+    // Per-owner aggregated surplus, keyed by user_id so that team-name
+    // changes across seasons collapse to one row. Display the most recent
+    // team_name/display_name we have for that owner.
+    const latestNameByUser = {};
+    state.sleeper.seasons.forEach(season => {
+      season.users.forEach(u => {
+        latestNameByUser[u.user_id] = userDisplay(u);
+      });
+    });
     const byDrafter = {};
     pickRows.forEach(r => {
       const exp = slotMedian[r.slot];
       if (exp == null) return;
       const surplus = r.value - exp;
-      const key = r.drafter;
-      (byDrafter[key] = byDrafter[key] || { picks: 0, total: 0, surplus: 0 });
+      const key = r.ownerUserId || r.drafter;
+      const label = (r.ownerUserId && latestNameByUser[r.ownerUserId]) || r.drafter;
+      (byDrafter[key] = byDrafter[key] || { drafter: label, picks: 0, total: 0, surplus: 0 });
+      byDrafter[key].drafter = label;
       byDrafter[key].picks += 1;
       byDrafter[key].total += r.value;
       byDrafter[key].surplus += surplus;
@@ -1810,9 +1820,9 @@ function renderStats() {
       )),
     );
     const veBody = el("tbody", {});
-    Object.entries(byDrafter)
-      .map(([drafter, s]) => ({
-        drafter, picks: s.picks, total: s.total,
+    Object.values(byDrafter)
+      .map(s => ({
+        drafter: s.drafter, picks: s.picks, total: s.total,
         avg: s.total / s.picks,
         avgSurplus: s.surplus / s.picks,
       }))

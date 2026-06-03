@@ -109,6 +109,10 @@ export default async function handler(req, res) {
         roster_id: r.roster_id,
         owner_id: r.owner_id,
         players: r.players || [],
+        wins: r.settings && r.settings.wins,
+        losses: r.settings && r.settings.losses,
+        ties: r.settings && r.settings.ties,
+        fpts: r.settings && (r.settings.fpts || 0) + ((r.settings.fpts_decimal || 0) / 100),
       })),
       drafts: sd.drafts.map(d => ({
         draft_id: d.draft_id,

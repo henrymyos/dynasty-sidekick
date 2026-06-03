@@ -343,6 +343,37 @@
   }
   tr.pos-tier td { color: var(--muted); font-size: 12px; }
 
+  .surplus-list { display: flex; flex-direction: column; gap: 4px; }
+  .surplus-row {
+    display: grid;
+    grid-template-columns: 80px minmax(0, 1fr) 140px 80px;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  .surplus-row:hover { background: var(--panel-2); }
+  .surplus-slot { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .surplus-player { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .surplus-by { color: var(--muted); font-size: 13px; text-align: right; }
+  .surplus-delta {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .delta-pos { color: var(--hit); }
+  .delta-neg { color: var(--miss); }
+
+  @media (max-width: 640px) {
+    .surplus-row {
+      grid-template-columns: 70px minmax(0,1fr) 70px;
+      font-size: 13px;
+    }
+    .surplus-by { display: none; }
+  }
+
   .pos-chip {
     display: inline-block;
     padding: 1px 6px;
@@ -561,6 +592,9 @@ let state = {
   sleeperError: null,
   draftsSeason: null,
   tradesUserId: null,
+  values: null,             // {players: {sleeperId: {...}}, updated}
+  valuesLoading: false,
+  valuesError: null,
 };
 
 function rgbToHex(bg) {
@@ -1551,6 +1585,290 @@ function renderStats() {
     "Only slots with 2+ picks at that position are considered. Hit % shown in parens."
   ));
   main.appendChild(sweetCard);
+
+  // ===== Stretch-win cards (need Sleeper / FantasyCalc data) =====
+  ensureSleeperLoaded();
+  ensureValuesLoaded();
+
+  // ----- Card: Pick Acquisition (Native / Trade-up / Trade-down) -----
+  const paCard = el("div", { class: "card" }, el("h2", {}, "Pick Acquisition"));
+  if (!state.sleeper) {
+    paCard.appendChild(el("div", { class: "empty" },
+      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"
+    ));
+  } else {
+    // Build a map: year -> slot -> { acquisition }
+    const acqMap = {};
+    state.sleeper.seasons.forEach(season => {
+      const draft = rookieDraftFor(season);
+      if (!draft) return;
+      const yr = parseInt(season.season, 10);
+      acqMap[yr] = {};
+      const slotMap = draft.slot_to_roster_id || {};
+      draft.picks.forEach(p => {
+        const slotStr = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
+        const nativeRoster = slotMap[p.draft_slot];
+        const drafterRoster = p.roster_id;
+        let kind = "native";
+        if (nativeRoster && drafterRoster && nativeRoster !== drafterRoster) {
+          // Find drafter's native slot for this round
+          const drafterNativeSlot = Object.entries(slotMap)
+            .find(([, rid]) => rid === drafterRoster);
+          if (drafterNativeSlot) {
+            const nativeSlotNum = parseInt(drafterNativeSlot[0], 10);
+            if (p.draft_slot < nativeSlotNum) kind = "up";
+            else if (p.draft_slot > nativeSlotNum) kind = "down";
+            else kind = "acquired";
+          } else {
+            kind = "acquired";
+          }
+        }
+        acqMap[yr][slotStr] = kind;
+      });
+    });
+    const buckets = { native: [], up: [], down: [], acquired: [] };
+    state.picks.forEach(p => {
+      if (!p.slot || !p.year || !p.result) return;
+      const kind = acqMap[p.year] && acqMap[p.year][p.slot];
+      if (!kind) return;
+      buckets[kind].push(p);
+    });
+    const paTable = el("table", {},
+      el("thead", {}, el("tr", {},
+        el("th", {}, "Acquisition"),
+        el("th", { class: "num" }, "Picks"),
+        el("th", { class: "num tight" }, "Hit"),
+        el("th", { class: "num tight" }, "Meh"),
+        el("th", { class: "num tight" }, "Miss"),
+        el("th", { class: "num tight gap-left" }, "Hit %"),
+        el("th", { class: "num tight" }, "Hit + Meh"),
+      )),
+    );
+    const paBody = el("tbody", {});
+    const baselineT = tally(state.picks.filter(p => p.round));
+    const baselineHit = baselineT.graded ? baselineT.hit / baselineT.graded : 0;
+    [
+      ["Native (kept own slot)", buckets.native],
+      ["Traded up", buckets.up],
+      ["Traded down", buckets.down],
+      ["Other acquired", buckets.acquired],
+    ].forEach(([label, list]) => {
+      const t = tally(list);
+      if (!t.graded) return;
+      paBody.appendChild(el("tr", {},
+        el("td", {}, label),
+        el("td", { class: "num" }, String(t.total)),
+        el("td", { class: "num tight" }, String(t.hit)),
+        el("td", { class: "num tight" }, String(t.meh)),
+        el("td", { class: "num tight" }, String(t.miss)),
+        el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
+        el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
+      ));
+    });
+    paTable.appendChild(paBody);
+    paCard.appendChild(paTable);
+    paCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
+      "Sleeper trades are matched to your sheet picks by year + slot. 'Up' means the drafter's natural slot was later than where they ended up picking."
+    ));
+  }
+  main.appendChild(paCard);
+
+  // ----- Card: Roster Construction (winners vs losers' rookie position mix) -----
+  const rcCard = el("div", { class: "card" }, el("h2", {}, "Roster Construction (winners vs losers)"));
+  if (!state.sleeper) {
+    rcCard.appendChild(el("div", { class: "empty" },
+      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"
+    ));
+  } else {
+    const POSITIONS = ["QB", "RB", "WR", "TE"];
+    const counts = {
+      top: { QB: 0, RB: 0, WR: 0, TE: 0, total: 0 },
+      bottom: { QB: 0, RB: 0, WR: 0, TE: 0, total: 0 },
+    };
+    state.sleeper.seasons.forEach(season => {
+      const draft = rookieDraftFor(season);
+      if (!draft) return;
+      // Standings: rosters sorted by wins desc, then fpts desc
+      const standings = season.rosters.slice().sort((a, b) => {
+        if ((b.wins || 0) !== (a.wins || 0)) return (b.wins || 0) - (a.wins || 0);
+        return (b.fpts || 0) - (a.fpts || 0);
+      });
+      if (!standings.length || !standings[0].wins) return;  // skip seasons without standings
+      const half = Math.floor(standings.length / 2);
+      const topRosters = new Set(standings.slice(0, half).map(r => r.roster_id));
+      const bottomRosters = new Set(standings.slice(-half).map(r => r.roster_id));
+      draft.picks.forEach(p => {
+        const sp = state.sleeper.players[p.player_id];
+        if (!sp || !POSITIONS.includes(sp.position)) return;
+        const targetBucket = topRosters.has(p.roster_id) ? "top"
+          : bottomRosters.has(p.roster_id) ? "bottom" : null;
+        if (!targetBucket) return;
+        counts[targetBucket][sp.position] += 1;
+        counts[targetBucket].total += 1;
+      });
+    });
+    if (!counts.top.total) {
+      rcCard.appendChild(el("div", { class: "empty" }, "Not enough finished seasons to compute standings yet."));
+    } else {
+      const rcTable = el("table", {},
+        el("thead", {}, el("tr", {},
+          el("th", {}, "Position"),
+          el("th", { class: "num tight" }, "Top half (%)"),
+          el("th", { class: "num tight" }, "Bottom half (%)"),
+          el("th", { class: "num tight gap-left" }, "Top vs Bot"),
+        )),
+      );
+      const rcBody = el("tbody", {});
+      POSITIONS.forEach(pos => {
+        const tpc = counts.top.total ? counts.top[pos] / counts.top.total : 0;
+        const bpc = counts.bottom.total ? counts.bottom[pos] / counts.bottom.total : 0;
+        const delta = tpc - bpc;
+        rcBody.appendChild(el("tr", {},
+          el("td", {},
+            el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
+            pos
+          ),
+          el("td", { class: "num tight" }, (tpc * 100).toFixed(0) + "%"),
+          el("td", { class: "num tight" }, (bpc * 100).toFixed(0) + "%"),
+          el("td", { class: "num tight gap-left" },
+            (delta >= 0 ? "+" : "") + (delta * 100).toFixed(0) + "%"),
+        ));
+      });
+      rcTable.appendChild(rcBody);
+      rcCard.appendChild(rcTable);
+      rcCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
+        `Sample: ${counts.top.total} rookie picks across top-half finishers, ${counts.bottom.total} across bottom-half. ` +
+        `Top half = upper 50% of standings each season (wins, then points-for tiebreak).`
+      ));
+    }
+  }
+  main.appendChild(rcCard);
+
+  // ----- Card: Value vs Expected (FantasyCalc) -----
+  const veCard = el("div", { class: "card" }, el("h2", {}, "Value vs Expected"));
+  if (!state.sleeper) {
+    veCard.appendChild(el("div", { class: "empty" },
+      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"
+    ));
+  } else if (!state.values) {
+    veCard.appendChild(el("div", { class: "empty" },
+      state.valuesError ? "FantasyCalc error: " + state.valuesError : "Loading FantasyCalc values…"
+    ));
+  } else {
+    // For each Sleeper pick (rookie draft), look up its current FantasyCalc value.
+    // Expected at a slot = median value of all picks at that slot (across years).
+    const slotValues = {};   // slot -> [values]
+    const pickRows = [];     // {year, slot, drafter, playerName, value}
+    state.sleeper.seasons.forEach(season => {
+      const draft = rookieDraftFor(season);
+      if (!draft) return;
+      draft.picks.forEach(p => {
+        const v = state.values.players[p.player_id];
+        if (!v) return;
+        const slotStr = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
+        (slotValues[slotStr] = slotValues[slotStr] || []).push(v.value);
+        const owner = rosterToOwner(season, p.roster_id);
+        pickRows.push({
+          year: parseInt(season.season, 10),
+          slot: slotStr,
+          drafter: owner ? userDisplay(owner) : "—",
+          ownerUserId: owner ? owner.user_id : null,
+          playerName: v.name,
+          position: v.position,
+          value: v.value,
+        });
+      });
+    });
+    const median = arr => {
+      if (!arr.length) return null;
+      const sorted = arr.slice().sort((a, b) => a - b);
+      const m = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+    };
+    const slotMedian = {};
+    Object.entries(slotValues).forEach(([slot, vs]) => { slotMedian[slot] = median(vs); });
+
+    // Per-drafter aggregated surplus
+    const byDrafter = {};
+    pickRows.forEach(r => {
+      const exp = slotMedian[r.slot];
+      if (exp == null) return;
+      const surplus = r.value - exp;
+      const key = r.drafter;
+      (byDrafter[key] = byDrafter[key] || { picks: 0, total: 0, surplus: 0 });
+      byDrafter[key].picks += 1;
+      byDrafter[key].total += r.value;
+      byDrafter[key].surplus += surplus;
+    });
+    const veTable = el("table", {},
+      el("thead", {}, el("tr", {},
+        el("th", {}, "Drafter"),
+        el("th", { class: "num" }, "Picks"),
+        el("th", { class: "num tight" }, "Total Value"),
+        el("th", { class: "num tight" }, "Avg / Pick"),
+        el("th", { class: "num tight gap-left" }, "Avg Surplus"),
+      )),
+    );
+    const veBody = el("tbody", {});
+    Object.entries(byDrafter)
+      .map(([drafter, s]) => ({
+        drafter, picks: s.picks, total: s.total,
+        avg: s.total / s.picks,
+        avgSurplus: s.surplus / s.picks,
+      }))
+      .sort((a, b) => b.avgSurplus - a.avgSurplus)
+      .forEach(r => {
+        veBody.appendChild(el("tr", {},
+          el("td", {}, r.drafter),
+          el("td", { class: "num" }, String(r.picks)),
+          el("td", { class: "num tight" }, r.total.toLocaleString()),
+          el("td", { class: "num tight" }, Math.round(r.avg).toLocaleString()),
+          el("td", { class: "num tight gap-left" },
+            (r.avgSurplus >= 0 ? "+" : "") + Math.round(r.avgSurplus).toLocaleString()),
+        ));
+      });
+    veTable.appendChild(veBody);
+    veCard.appendChild(veTable);
+
+    // Top steals & worst reaches
+    const ranked = pickRows
+      .map(r => ({ ...r, expected: slotMedian[r.slot], surplus: r.value - (slotMedian[r.slot] || 0) }))
+      .filter(r => r.expected != null);
+    const steals = ranked.slice().sort((a, b) => b.surplus - a.surplus).slice(0, 5);
+    const reaches = ranked.slice().sort((a, b) => a.surplus - b.surplus).slice(0, 5);
+
+    veCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest steals (value over expected)"));
+    veCard.appendChild(renderSurplusList(steals));
+    veCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest reaches (under expected)"));
+    veCard.appendChild(renderSurplusList(reaches));
+
+    veCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
+      "“Value” is FantasyCalc's current 1QB / 12-team / PPR dynasty value. " +
+      "Expected per slot is the median value of all picks taken at that slot across years. " +
+      "Surplus = actual value − expected. Reflects how picks have turned out, not the consensus at draft time."
+    ));
+  }
+  main.appendChild(veCard);
+}
+
+function renderSurplusList(rows) {
+  const wrap = el("div", { class: "surplus-list" });
+  rows.forEach(r => {
+    wrap.appendChild(el("div", { class: "surplus-row" },
+      el("span", { class: "surplus-slot" }, r.year + " · " + r.slot),
+      el("span", { class: "surplus-player" },
+        r.playerName,
+        r.position
+          ? el("span", { class: "pos-chip " + positionClass(r.position), style: "margin-left:8px" }, r.position)
+          : null,
+      ),
+      el("span", { class: "surplus-by" }, "by " + r.drafter),
+      el("span", { class: "surplus-delta " + (r.surplus >= 0 ? "delta-pos" : "delta-neg") },
+        (r.surplus >= 0 ? "+" : "") + Math.round(r.surplus).toLocaleString()
+      ),
+    ));
+  });
+  return wrap;
 }
 
 // ---------- Sleeper integration ----------
@@ -1576,6 +1894,40 @@ async function loadSleeper(force = false) {
 
 function ensureSleeperLoaded() {
   if (!state.sleeper && !state.sleeperLoading && !state.sleeperError) loadSleeper();
+}
+
+async function loadValues(force = false) {
+  if (state.valuesLoading) return;
+  if (state.values && !force) return;
+  state.valuesLoading = true;
+  state.valuesError = null;
+  render();
+  try {
+    const res = await fetch("/api/values" + (force ? "?_=" + Date.now() : ""), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.values = data;
+  } catch (e) {
+    state.valuesError = e.message;
+  } finally {
+    state.valuesLoading = false;
+    render();
+  }
+}
+function ensureValuesLoaded() {
+  if (!state.values && !state.valuesLoading && !state.valuesError) loadValues();
+}
+
+// Pick the canonical "rookie draft" for a season: first complete 3-round draft
+// (chronological). Falls back to earliest complete draft otherwise.
+function rookieDraftFor(season) {
+  if (!season) return null;
+  const completed = season.drafts.filter(d => d.status === "complete" && d.picks && d.picks.length);
+  if (!completed.length) return null;
+  const threeRound = completed.filter(d => d.rounds === 3);
+  const candidates = threeRound.length ? threeRound : completed;
+  return candidates.slice().sort((a, b) => (a.created || 0) - (b.created || 0))[0];
 }
 
 function rosterToOwner(season, rosterId) {

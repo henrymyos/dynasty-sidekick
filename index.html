@@ -383,15 +383,16 @@
     td.gap-left, th.gap-left { padding-left: 14px; }
 
     .pick-row {
-      grid-template-columns: 70px 1fr 56px;
-      gap: 8px;
-      padding: 7px 6px;
+      grid-template-columns: 64px minmax(0, 1fr) 72px;
+      gap: 6px;
+      padding: 7px 4px;
       font-size: 13px;
     }
     .pick-row.with-slot {
-      grid-template-columns: 70px 44px 1fr 56px;
+      grid-template-columns: 60px 42px minmax(0, 1fr) 72px;
     }
-    .pick-result { font-size: 11px; padding: 2px 6px; }
+    .pick-player { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pick-result { font-size: 10px; padding: 2px 4px; }
     .round-header { font-size: 11px; }
 
     .mobile-hide { display: none !important; }

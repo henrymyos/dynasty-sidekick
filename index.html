@@ -1946,23 +1946,31 @@ function rookieDraftFor(season) {
 // Leaderboard / By Person data.
 const OWNER_NAME_MERGES = {
   "Galactic Empire": "Henry",
+  "The Galactic Empire": "Henry",
   "Bob's Dynasty": "Ethan",
   "28AllDay": "Seth",
   "Huntrix Dad": "Jake",
   "Pint-Sized": "Isaac",
+  "Pint-Sized Punishers": "Isaac",
   "Beat My Kids": "Dad",
+  "Beat My Kids Tour 2026": "Dad",
   "ChampaignTornadoes": "Joseph",
   "daynamyos": "Joseph",
   "Simon3y": "Simon",
   "Mother Theresa": "Paige",
   "Mother Theresa's Child": "Paige",
+  "Mother Theresa's child": "Paige",
   "TryingToSuckAtTryingToLose": "Paige",
   "The Bedouin": "Jacques",
   "Revenge of the Roofers": "Charlie",
   "QB camp": "John",
+  "Elite 11 QB camp": "John",
 };
 function canonicalOwnerName(name) {
-  return (name && OWNER_NAME_MERGES[name]) || name;
+  if (!name) return name;
+  // Normalize curly/straight apostrophes so display variants still match.
+  const normalized = name.replace(/[‘’]/g, "'");
+  return OWNER_NAME_MERGES[normalized] || OWNER_NAME_MERGES[name] || name;
 }
 
 function rosterToOwner(season, rosterId) {

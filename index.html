@@ -592,9 +592,9 @@ let state = {
   sleeperError: null,
   draftsSeason: null,
   tradesUserId: null,
-  values: null,             // {players: {sleeperId: {...}}, updated}
-  valuesLoading: false,
-  valuesError: null,
+  ktc: null,                // {seasons: {year: {snapshot, players: {normName: {rank,value,position}}}}}
+  ktcLoading: false,
+  ktcError: null,
 };
 
 function rgbToHex(bg) {
@@ -1586,9 +1586,9 @@ function renderStats() {
   ));
   main.appendChild(sweetCard);
 
-  // ===== Stretch-win cards (need Sleeper / FantasyCalc data) =====
+  // ===== Stretch-win cards (need Sleeper / KTC data) =====
   ensureSleeperLoaded();
-  ensureValuesLoaded();
+  ensureKtcLoaded();
 
   // ----- Card: Pick Acquisition (Native / Trade-up / Trade-down) -----
   const paCard = el("div", { class: "card" }, el("h2", {}, "Pick Acquisition"));
@@ -1744,126 +1744,132 @@ function renderStats() {
   }
   main.appendChild(rcCard);
 
-  // ----- Card: Value vs Expected (FantasyCalc) -----
-  const veCard = el("div", { class: "card" }, el("h2", {}, "Value vs Expected"));
+  // ----- Card: ADP vs Pick (KeepTradeCut) -----
+  const adpCard = el("div", { class: "card" }, el("h2", {}, "ADP vs Pick (KeepTradeCut)"));
   if (!state.sleeper) {
-    veCard.appendChild(el("div", { class: "empty" },
+    adpCard.appendChild(el("div", { class: "empty" },
       state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"
     ));
-  } else if (!state.values) {
-    veCard.appendChild(el("div", { class: "empty" },
-      state.valuesError ? "FantasyCalc error: " + state.valuesError : "Loading FantasyCalc values…"
+  } else if (!state.ktc) {
+    adpCard.appendChild(el("div", { class: "empty" },
+      state.ktcError ? "KTC error: " + state.ktcError : "Loading KeepTradeCut snapshots (slow on first load)…"
     ));
   } else {
-    // For each Sleeper pick (rookie draft), look up its current FantasyCalc value.
-    // Expected at a slot = median value of all picks at that slot (across years).
-    const slotValues = {};   // slot -> [values]
-    const pickRows = [];     // {year, slot, drafter, playerName, value}
+    const pickRows = [];
     state.sleeper.seasons.forEach(season => {
       const draft = rookieDraftFor(season);
       if (!draft) return;
-      draft.picks.filter(p => p.round <= 3).forEach(p => {
-        const v = state.values.players[p.player_id];
-        if (!v) return;
-        const slotStr = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
-        (slotValues[slotStr] = slotValues[slotStr] || []).push(v.value);
-        const owner = rosterToOwner(season, p.roster_id);
-        pickRows.push({
-          year: parseInt(season.season, 10),
-          slot: slotStr,
-          drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
-          ownerUserId: owner ? owner.user_id : null,
-          playerName: v.name,
-          position: v.position,
-          value: v.value,
+      const snap = state.ktc.seasons && state.ktc.seasons[season.season];
+      if (!snap || !snap.players) return;
+
+      const picksThisYear = draft.picks
+        .filter(p => p.round <= 3)
+        .map(p => {
+          const sp = state.sleeper.players[p.player_id];
+          const playerName = sp ? sp.name : null;
+          const ktc = playerName ? snap.players[ktcNormalizeName(playerName)] : null;
+          const owner = rosterToOwner(season, p.roster_id);
+          const overall = (p.round - 1) * 12 + p.pick_no;
+          return {
+            year: parseInt(season.season, 10),
+            slot: `${p.round}.${String(p.draft_slot).padStart(2, "0")}`,
+            overall,
+            drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
+            ownerUserId: owner ? owner.user_id : null,
+            playerName: playerName || ("Player " + p.player_id),
+            position: sp ? sp.position : (ktc ? ktc.position : null),
+            ktcValue: ktc ? ktc.value : null,
+            ktcRank: ktc ? ktc.rank : null,
+          };
         });
+      // ADP overall = rank within matched picks of this draft when sorted by KTC value desc.
+      const matched = picksThisYear.filter(p => p.ktcRank != null);
+      matched.sort((a, b) => a.ktcRank - b.ktcRank);
+      const adpByKey = {};
+      matched.forEach((p, idx) => { adpByKey[p.playerName + "|" + p.year] = idx + 1; });
+      picksThisYear.forEach(p => {
+        const key = p.playerName + "|" + p.year;
+        if (adpByKey[key] != null) {
+          p.adpOverall = adpByKey[key];
+          p.diff = p.overall - p.adpOverall;  // negative = reach (taken earlier than ADP)
+        }
       });
+      pickRows.push(...picksThisYear);
     });
-    const median = arr => {
-      if (!arr.length) return null;
-      const sorted = arr.slice().sort((a, b) => a - b);
-      const m = Math.floor(sorted.length / 2);
-      return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
-    };
-    const slotMedian = {};
-    Object.entries(slotValues).forEach(([slot, vs]) => { slotMedian[slot] = median(vs); });
 
-    // Per-owner aggregated surplus, keyed by user_id so that team-name
-    // changes across seasons collapse to one row. Display the most recent
-    // team_name/display_name we have for that owner.
-    const latestNameByUser = {};
-    state.sleeper.seasons.forEach(season => {
-      season.users.forEach(u => {
-        latestNameByUser[u.user_id] = userDisplay(u);
+    const rows = pickRows.filter(p => p.diff != null);
+    if (!rows.length) {
+      adpCard.appendChild(el("div", { class: "empty" },
+        "No matched KTC data yet. Check the snapshot table below for fetch errors."
+      ));
+    } else {
+      const byDrafter = {};
+      rows.forEach(r => {
+        const key = r.drafter;
+        (byDrafter[key] = byDrafter[key] || { drafter: key, picks: 0, sumDiff: 0, reaches: 0, steals: 0 });
+        byDrafter[key].picks += 1;
+        byDrafter[key].sumDiff += r.diff;
+        if (r.diff < 0) byDrafter[key].reaches += 1;
+        else if (r.diff > 0) byDrafter[key].steals += 1;
       });
+      const adpTable = el("table", {},
+        el("thead", {}, el("tr", {},
+          el("th", {}, "Drafter"),
+          el("th", { class: "num" }, "Matched"),
+          el("th", { class: "num tight" }, "Reaches"),
+          el("th", { class: "num tight" }, "Steals"),
+          el("th", { class: "num tight gap-left" }, "Avg vs ADP"),
+        )),
+      );
+      const adpBody = el("tbody", {});
+      Object.values(byDrafter)
+        .map(s => ({ ...s, avgDiff: s.sumDiff / s.picks }))
+        .sort((a, b) => b.avgDiff - a.avgDiff)
+        .forEach(r => {
+          adpBody.appendChild(el("tr", {},
+            el("td", {}, r.drafter),
+            el("td", { class: "num" }, String(r.picks)),
+            el("td", { class: "num tight" }, String(r.reaches)),
+            el("td", { class: "num tight" }, String(r.steals)),
+            el("td", { class: "num tight gap-left" },
+              (r.avgDiff >= 0 ? "+" : "") + r.avgDiff.toFixed(1)),
+          ));
+        });
+      adpTable.appendChild(adpBody);
+      adpCard.appendChild(adpTable);
+
+      const steals = rows.slice().sort((a, b) => b.diff - a.diff).slice(0, 8);
+      const reaches = rows.slice().sort((a, b) => a.diff - b.diff).slice(0, 8);
+      adpCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest steals (taken much later than ADP)"));
+      adpCard.appendChild(renderAdpList(steals));
+      adpCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest reaches (taken much earlier than ADP)"));
+      adpCard.appendChild(renderAdpList(reaches));
+    }
+
+    const meta = el("div", { class: "pct", style: "margin-top:14px" });
+    const lines = ["Snapshots used:"];
+    Object.entries(state.ktc.seasons || {}).forEach(([year, info]) => {
+      const ts = info.snapshot || "—";
+      const date = ts.length >= 8 ? `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}` : ts;
+      const err = info.error ? ` (${info.error})` : "";
+      const ct = info.players ? Object.keys(info.players).length : 0;
+      lines.push(`${year}: ${date}, ${ct} players${err}`);
     });
-    const byDrafter = {};
-    pickRows.forEach(r => {
-      const exp = slotMedian[r.slot];
-      if (exp == null) return;
-      const surplus = r.value - exp;
-      const rawLabel = (r.ownerUserId && latestNameByUser[r.ownerUserId]) || r.drafter;
-      const label = canonicalOwnerName(rawLabel);
-      const key = label;
-      (byDrafter[key] = byDrafter[key] || { drafter: label, picks: 0, total: 0, surplus: 0 });
-      byDrafter[key].picks += 1;
-      byDrafter[key].total += r.value;
-      byDrafter[key].surplus += surplus;
-    });
-    const veTable = el("table", {},
-      el("thead", {}, el("tr", {},
-        el("th", {}, "Drafter"),
-        el("th", { class: "num" }, "Picks"),
-        el("th", { class: "num tight" }, "Total Value"),
-        el("th", { class: "num tight" }, "Avg / Pick"),
-        el("th", { class: "num tight gap-left" }, "Avg Surplus"),
-      )),
-    );
-    const veBody = el("tbody", {});
-    Object.values(byDrafter)
-      .map(s => ({
-        drafter: s.drafter, picks: s.picks, total: s.total,
-        avg: s.total / s.picks,
-        avgSurplus: s.surplus / s.picks,
-      }))
-      .sort((a, b) => b.avgSurplus - a.avgSurplus)
-      .forEach(r => {
-        veBody.appendChild(el("tr", {},
-          el("td", {}, r.drafter),
-          el("td", { class: "num" }, String(r.picks)),
-          el("td", { class: "num tight" }, r.total.toLocaleString()),
-          el("td", { class: "num tight" }, Math.round(r.avg).toLocaleString()),
-          el("td", { class: "num tight gap-left" },
-            (r.avgSurplus >= 0 ? "+" : "") + Math.round(r.avgSurplus).toLocaleString()),
-        ));
-      });
-    veTable.appendChild(veBody);
-    veCard.appendChild(veTable);
+    meta.textContent = lines.join("  ·  ");
+    adpCard.appendChild(meta);
 
-    // Top steals & worst reaches
-    const ranked = pickRows
-      .map(r => ({ ...r, expected: slotMedian[r.slot], surplus: r.value - (slotMedian[r.slot] || 0) }))
-      .filter(r => r.expected != null);
-    const steals = ranked.slice().sort((a, b) => b.surplus - a.surplus).slice(0, 5);
-    const reaches = ranked.slice().sort((a, b) => a.surplus - b.surplus).slice(0, 5);
-
-    veCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest steals (value over expected)"));
-    veCard.appendChild(renderSurplusList(steals));
-    veCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest reaches (under expected)"));
-    veCard.appendChild(renderSurplusList(reaches));
-
-    veCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
-      "“Value” is FantasyCalc's current 1QB / 12-team / PPR dynasty value. " +
-      "Expected per slot is the median value of all picks taken at that slot across years. " +
-      "Surplus = actual value − expected. Reflects how picks have turned out, not the consensus at draft time."
+    adpCard.appendChild(el("div", { class: "pct", style: "margin-top:6px" },
+      "ADP overall = rank when the draft's matched picks are sorted by KTC dynasty value (1QB / 12-team). " +
+      "Diff = actual pick − ADP. Negative = reached (taken earlier than KTC said); positive = steal."
     ));
   }
-  main.appendChild(veCard);
+  main.appendChild(adpCard);
 }
 
-function renderSurplusList(rows) {
+function renderAdpList(rows) {
   const wrap = el("div", { class: "surplus-list" });
   rows.forEach(r => {
+    const diffLabel = (r.diff >= 0 ? "+" : "") + r.diff;
     wrap.appendChild(el("div", { class: "surplus-row" },
       el("span", { class: "surplus-slot" }, r.year + " · " + r.slot),
       el("span", { class: "surplus-player" },
@@ -1871,10 +1877,11 @@ function renderSurplusList(rows) {
         r.position
           ? el("span", { class: "pos-chip " + positionClass(r.position), style: "margin-left:8px" }, r.position)
           : null,
+        el("span", { class: "pct", style: "margin-left:8px" }, "ADP " + r.adpOverall),
       ),
       el("span", { class: "surplus-by" }, "by " + r.drafter),
-      el("span", { class: "surplus-delta " + (r.surplus >= 0 ? "delta-pos" : "delta-neg") },
-        (r.surplus >= 0 ? "+" : "") + Math.round(r.surplus).toLocaleString()
+      el("span", { class: "surplus-delta " + (r.diff >= 0 ? "delta-pos" : "delta-neg") },
+        diffLabel + " vs ADP"
       ),
     ));
   });
@@ -1906,27 +1913,38 @@ function ensureSleeperLoaded() {
   if (!state.sleeper && !state.sleeperLoading && !state.sleeperError) loadSleeper();
 }
 
-async function loadValues(force = false) {
-  if (state.valuesLoading) return;
-  if (state.values && !force) return;
-  state.valuesLoading = true;
-  state.valuesError = null;
+async function loadKtc(force = false) {
+  if (state.ktcLoading) return;
+  if (state.ktc && !force) return;
+  state.ktcLoading = true;
+  state.ktcError = null;
   render();
   try {
-    const res = await fetch("/api/values" + (force ? "?_=" + Date.now() : ""), { cache: "no-store" });
+    const res = await fetch("/api/ktc" + (force ? "?_=" + Date.now() : ""), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    state.values = data;
+    state.ktc = data;
   } catch (e) {
-    state.valuesError = e.message;
+    state.ktcError = e.message;
   } finally {
-    state.valuesLoading = false;
+    state.ktcLoading = false;
     render();
   }
 }
-function ensureValuesLoaded() {
-  if (!state.values && !state.valuesLoading && !state.valuesError) loadValues();
+function ensureKtcLoaded() {
+  if (!state.ktc && !state.ktcLoading && !state.ktcError) loadKtc();
+}
+
+// Same normalization as /api/ktc.js — keep in sync for joins to work.
+function ktcNormalizeName(s) {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[’‘ʼ]/g, "'")
+    .replace(/[.,'`]/g, "")
+    .replace(/\s+jr\b|\s+sr\b|\s+ii\b|\s+iii\b|\s+iv\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // Pick the canonical rookie draft for a season: the first chronologically-created

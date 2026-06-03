@@ -1077,6 +1077,98 @@ function renderStats() {
   matrixCard.appendChild(matrixTable);
   main.appendChild(matrixCard);
 
+  // ----- Round tier breakdown (Early/Mid/Late within each round) -----
+  const tierCard = el("div", { class: "card" }, el("h2", {}, "By Round Tier"));
+  const tierTable = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", {}, "Tier"),
+      el("th", { class: "num" }, "Picks"),
+      el("th", { class: "num tight" }, "Hit"),
+      el("th", { class: "num tight" }, "Meh"),
+      el("th", { class: "num tight" }, "Miss"),
+      el("th", { class: "num tight gap-left" }, "Hit %"),
+      el("th", { class: "num tight" }, "Hit + Meh"),
+      el("th", { class: "mobile-hide" }, "Mix"),
+    )),
+  );
+  const ttbody = el("tbody", {});
+  function tierOf(pir) {
+    if (!pir) return null;
+    if (pir <= 4) return "Early";
+    if (pir <= 8) return "Mid";
+    return "Late";
+  }
+  [1, 2, 3].forEach(rd => {
+    const roundPicks = state.picks.filter(p => p.round === rd);
+    const rt = tally(roundPicks);
+    ttbody.appendChild(el("tr", { class: "pos-total" },
+      el("td", {}, "Round " + rd),
+      el("td", { class: "num" }, String(rt.total)),
+      el("td", { class: "num tight" }, String(rt.hit)),
+      el("td", { class: "num tight" }, String(rt.meh)),
+      el("td", { class: "num tight" }, String(rt.miss)),
+      el("td", { class: "num tight gap-left" }, formatPct(rt.hit, rt.graded)),
+      el("td", { class: "num tight" }, formatPct(rt.hit + rt.meh, rt.graded)),
+      el("td", { class: "mobile-hide" }, renderBar(rt)),
+    ));
+    ["Early", "Mid", "Late"].forEach(tier => {
+      const sub = roundPicks.filter(p => tierOf(p.pickInRound) === tier);
+      if (!sub.length) return;
+      const t = tally(sub);
+      const slotRange = tier === "Early" ? "1-4" : tier === "Mid" ? "5-8" : "9-12";
+      ttbody.appendChild(el("tr", { class: "pos-sub" },
+        el("td", {}, `${tier} (${rd}.${slotRange})`),
+        el("td", { class: "num" }, String(t.total)),
+        el("td", { class: "num tight" }, String(t.hit)),
+        el("td", { class: "num tight" }, String(t.meh)),
+        el("td", { class: "num tight" }, String(t.miss)),
+        el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
+        el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
+        el("td", { class: "mobile-hide" }, renderBar(t)),
+      ));
+    });
+  });
+  tierTable.appendChild(ttbody);
+  tierCard.appendChild(tierTable);
+  main.appendChild(tierCard);
+
+  // ----- Per-slot breakdown (1.01 through 3.12 across all years) -----
+  const slotCard = el("div", { class: "card" }, el("h2", {}, "By Pick Slot"));
+  const slotTable = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", {}, "Slot"),
+      el("th", { class: "num" }, "Picks"),
+      el("th", { class: "num tight" }, "Hit"),
+      el("th", { class: "num tight" }, "Meh"),
+      el("th", { class: "num tight" }, "Miss"),
+      el("th", { class: "num tight gap-left" }, "Hit %"),
+      el("th", { class: "num tight" }, "Hit + Meh"),
+      el("th", { class: "mobile-hide" }, "Mix"),
+    )),
+  );
+  const stbody = el("tbody", {});
+  [1, 2, 3].forEach(rd => {
+    for (let s = 1; s <= 12; s++) {
+      const sub = state.picks.filter(p => p.round === rd && p.pickInRound === s);
+      if (!sub.length) continue;
+      const t = tally(sub);
+      const slot = `${rd}.${String(s).padStart(2, "0")}`;
+      stbody.appendChild(el("tr", {},
+        el("td", {}, slot),
+        el("td", { class: "num" }, String(t.total)),
+        el("td", { class: "num tight" }, String(t.hit)),
+        el("td", { class: "num tight" }, String(t.meh)),
+        el("td", { class: "num tight" }, String(t.miss)),
+        el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
+        el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
+        el("td", { class: "mobile-hide" }, renderBar(t)),
+      ));
+    }
+  });
+  slotTable.appendChild(stbody);
+  slotCard.appendChild(slotTable);
+  main.appendChild(slotCard);
+
   // ----- Position breakdown (fixed mapping: red=QB, green=RB, blue=WR, orange=TE) -----
   const posCard = el("div", { class: "card" }, el("h2", {}, "By Position"));
   const posPicks = state.picks.filter(p => p.pos);

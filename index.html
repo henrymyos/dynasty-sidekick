@@ -1771,7 +1771,7 @@ function renderStats() {
         pickRows.push({
           year: parseInt(season.season, 10),
           slot: slotStr,
-          drafter: owner ? userDisplay(owner) : "—",
+          drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
           ownerUserId: owner ? owner.user_id : null,
           playerName: v.name,
           position: v.position,
@@ -1802,10 +1802,10 @@ function renderStats() {
       const exp = slotMedian[r.slot];
       if (exp == null) return;
       const surplus = r.value - exp;
-      const key = r.ownerUserId || r.drafter;
-      const label = (r.ownerUserId && latestNameByUser[r.ownerUserId]) || r.drafter;
+      const rawLabel = (r.ownerUserId && latestNameByUser[r.ownerUserId]) || r.drafter;
+      const label = canonicalOwnerName(rawLabel);
+      const key = label;
       (byDrafter[key] = byDrafter[key] || { drafter: label, picks: 0, total: 0, surplus: 0 });
-      byDrafter[key].drafter = label;
       byDrafter[key].picks += 1;
       byDrafter[key].total += r.value;
       byDrafter[key].surplus += surplus;
@@ -1929,15 +1929,28 @@ function ensureValuesLoaded() {
   if (!state.values && !state.valuesLoading && !state.valuesError) loadValues();
 }
 
-// Pick the canonical "rookie draft" for a season: first complete 3-round draft
-// (chronological). Falls back to earliest complete draft otherwise.
+// Pick the canonical rookie draft for a season: the first chronologically-created
+// complete 3-round draft. Startups (other round counts) and supplementals
+// created later are excluded — null means "this season has no rookie draft".
 function rookieDraftFor(season) {
   if (!season) return null;
-  const completed = season.drafts.filter(d => d.status === "complete" && d.picks && d.picks.length);
+  const completed = season.drafts.filter(d =>
+    d.status === "complete" && d.picks && d.picks.length && d.rounds === 3
+  );
   if (!completed.length) return null;
-  const threeRound = completed.filter(d => d.rounds === 3);
-  const candidates = threeRound.length ? threeRound : completed;
-  return candidates.slice().sort((a, b) => (a.created || 0) - (b.created || 0))[0];
+  return completed.slice().sort((a, b) => (a.created || 0) - (b.created || 0))[0];
+}
+
+// Manual merges for owners whose team passed through multiple Sleeper accounts
+// over the years. Map any of the listed display names to the canonical label.
+const OWNER_NAME_MERGES = {
+  "Mother Theresa's Child": "TryingToSuckAtTryingToLose",
+  "TryingToSuckAtTryingToLose": "TryingToSuckAtTryingToLose",
+  "daynamyos": "ChampaignTornadoes",
+  "ChampaignTornadoes": "ChampaignTornadoes",
+};
+function canonicalOwnerName(name) {
+  return (name && OWNER_NAME_MERGES[name]) || name;
 }
 
 function rosterToOwner(season, rosterId) {

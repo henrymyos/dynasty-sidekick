@@ -2035,9 +2035,9 @@ function renderStats() {
   main.appendChild(el("div", { class: "section-header" }, "Strategy Signals",
     el("span", { class: "section-sub" }, "Does beating consensus work?")));
 
-  // ----- Card: Auto-Graded Picks (best positional rank vs round tier) -----
+  // ----- Card: Auto-Graded Picks (top-5 avg positional rank vs round tier) -----
   ensurePlayerStatsLoaded();
-  const agCard = el("div", { class: "card" }, el("h2", {}, "Auto-Graded Picks (Best Position Rank)"));
+  const agCard = el("div", { class: "card" }, el("h2", {}, "Auto-Graded Picks (Top-5 Avg Position Rank)"));
   if (!state.sleeper) {
     agCard.appendChild(el("div", { class: "empty" },
       state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
@@ -2053,12 +2053,11 @@ function renderStats() {
       draft.picks.filter(p => p.round <= 3).forEach(p => {
         const sp = state.sleeper.players[p.player_id];
         if (!sp) return;
-        const career = bestPosRankSinceDraft(p.player_id, year);
+        const career = top5AvgRankSinceDraft(p.player_id, year);
         const slot = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
-        // Skip picks with <4 career games (still rookies, cuts, severe injury).
-        const enoughSample = career && career.totalGames >= 4;
+        const enoughSample = career && career.totalGames >= 4 && career.avgRank != null;
         const grade = enoughSample
-          ? autoGradeByPosRank(career.bestRank, p.round)
+          ? autoGradeByPosRank(career.avgRank, p.round)
           : { grade: null, magnitude: 0 };
         const owner = rosterToOwner(season, p.roster_id);
         gradedPicks.push({
@@ -2069,8 +2068,9 @@ function renderStats() {
           drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
           playerName: sp.name,
           position: sp.position,
-          bestRank: career ? career.bestRank : null,
-          bestSeason: career ? career.bestSeason : null,
+          avgRank: career ? career.avgRank : null,
+          top5: career ? career.top5 : [],
+          seasons: career ? career.seasons : 0,
           games: career ? career.totalGames : 0,
           ...grade,
         });
@@ -2132,8 +2132,8 @@ function renderStats() {
     function renderGradeList(rows) {
       const wrap = el("div", { class: "surplus-list" });
       rows.forEach(g => {
-        const finishLabel = g.bestRank != null
-          ? `Best: ${g.position}${g.bestRank}` + (g.bestSeason ? ` (${g.bestSeason})` : "")
+        const avgLabel = g.avgRank != null
+          ? `Avg: ${g.position}${g.avgRank.toFixed(1)} (${g.seasons} season${g.seasons === 1 ? "" : "s"})`
           : "—";
         wrap.appendChild(el("div", { class: "surplus-row" },
           el("span", { class: "surplus-slot" }, `${g.year} · ${g.slot}`),
@@ -2145,18 +2145,17 @@ function renderStats() {
             el("span", { class: "auto-grade-chip " + autoGradeClass(g.magnitude), style: "margin-left:8px" }, g.grade),
           ),
           el("span", { class: "surplus-by" }, "by " + g.drafter),
-          el("span", { class: "surplus-delta " + (g.magnitude >= 0 ? "delta-pos" : "delta-neg") }, finishLabel),
+          el("span", { class: "surplus-delta " + (g.magnitude >= 0 ? "delta-pos" : "delta-neg") }, avgLabel),
         ));
       });
       return wrap;
     }
 
-    // Sort by how far the rank beat / missed the round's "hit" threshold.
+    // Sort by how far the avg rank beat / missed the round's "hit" threshold.
     function rankSurplus(g) {
       if (!g.grade) return null;
       const tier = ROUND_TIERS[g.round] || ROUND_TIERS[3];
-      // Lower rank = better. Positive = beat hit bar, negative = missed.
-      return tier.hit - g.bestRank;
+      return tier.hit - g.avgRank;
     }
     const sortable = graded.filter(g => rankSurplus(g) != null);
     const sortedBySurplus = sortable.slice().sort((a, b) => rankSurplus(b) - rankSurplus(a));
@@ -2166,11 +2165,11 @@ function renderStats() {
     agCard.appendChild(renderGradeList(sortedBySurplus.slice(-8).reverse()));
 
     agCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
-      "Grade is set by each pick's best positional finish at any point since draft, " +
-      "using your league's scoring_settings to compute fantasy points per season. " +
+      "Grade is the average of each pick's best five positional finishes since draft, scored with your league's scoring_settings. " +
+      "If a player has fewer than five graded seasons, the missing slots are extrapolated at the player's running average " +
+      "(mathematically equivalent to averaging the seasons they do have). " +
       "Round 1: Big Hit ≤ pos 6, Hit ≤ 12, Meh ≤ 24, Miss ≤ 36, Big Miss > 36. " +
-      "Round 2: 12 / 24 / 36 / 48. Round 3: 18 / 36 / 48 / 60. " +
-      "The earlier the pick, the higher the bar to clear."
+      "Round 2: 12 / 24 / 36 / 48. Round 3: 18 / 36 / 48 / 60."
     ));
   }
   main.appendChild(agCard);
@@ -2459,25 +2458,26 @@ function ensurePlayerStatsLoaded() {
   if (!state.playerStats && !state.playerStatsLoading && !state.playerStatsError) loadPlayerStats();
 }
 
-// Best (lowest) league-scored positional rank a player has hit across any
-// season since their draft. Also returns total games so we can skip picks
-// without meaningful sample.
-function bestPosRankSinceDraft(playerId, draftYear) {
+// Average of the player's BEST FIVE league-scored positional ranks since draft.
+// If they have fewer than five graded seasons, we extrapolate the missing
+// slots by assuming each one matches the player's running average — which
+// mathematically reduces to just averaging the seasons they do have.
+function top5AvgRankSinceDraft(playerId, draftYear) {
   if (!state.playerStats || !state.playerStats.seasons) return null;
-  let best = null;
-  let bestSeason = null;
+  const ranks = [];
   let totalGames = 0;
   Object.entries(state.playerStats.seasons).forEach(([season, players]) => {
     if (parseInt(season, 10) < draftYear) return;
     const s = players && players[playerId];
     if (!s) return;
     totalGames += s.games || 0;
-    if (s.pos_rank_league != null && (best == null || s.pos_rank_league < best)) {
-      best = s.pos_rank_league;
-      bestSeason = season;
-    }
+    if (s.pos_rank_league != null) ranks.push({ rank: s.pos_rank_league, season });
   });
-  return { bestRank: best, bestSeason, totalGames };
+  if (!ranks.length) return { avgRank: null, top5: [], seasons: 0, totalGames };
+  ranks.sort((a, b) => a.rank - b.rank);
+  const top5 = ranks.slice(0, 5);
+  const avgRank = top5.reduce((a, r) => a + r.rank, 0) / top5.length;
+  return { avgRank, top5, seasons: ranks.length, totalGames };
 }
 
 // Round-based tiers: a 1.xx pick needs to be top-12 at position to "hit", a

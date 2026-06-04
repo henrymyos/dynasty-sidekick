@@ -1,17 +1,19 @@
-// Historical KeepTradeCut rookie ADP, scraped from Wayback Machine snapshots
-// taken close to each year's NFL Draft so the relevant rookie class is in
-// the data. For 2020 the earliest Wayback snapshot with usable data is
-// Nov 1, 2020 (still ~5 months after the league's May draft).
+// KeepTradeCut superflex (2QB) rookie rankings, pulled from Wayback Machine
+// snapshots of KTC's rookie-rankings page. Each snapshot is chosen to match
+// — as closely as possible — when the user's fantasy rookie draft happened
+// that year, so users can click the snapshot URL to verify the numbers.
 //
-// Each season returns a map of normalized player name -> { rank, value, position }.
+// The frontend uses each rookie's `rookieRank` as ADP. Older snapshots
+// (pre-2021) don't carry a rookieRank field, so we always re-derive it by
+// sorting rookies on `superflexValues.value` desc — the same way KTC does.
 
 const SEASON_SNAPSHOTS = {
-  "2020": { ts: "20201101092924", original: "https://www.keeptradecut.com/" },
-  "2021": { ts: "20210724022232", original: "https://keeptradecut.com/dynasty-rankings" },
-  "2022": { ts: "20220516093752", original: "https://keeptradecut.com/dynasty-rankings" },
-  "2023": { ts: "20230501073945", original: "https://keeptradecut.com/" },
-  "2024": { ts: "20240622170419", original: "https://keeptradecut.com/dynasty-rankings" },
-  "2025": { ts: "20250510141825", original: "https://keeptradecut.com/dynasty-rankings" },
+  "2020": { ts: "20201126095831", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
+  "2021": { ts: "20210503211711", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
+  "2022": { ts: "20220628220026", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
+  "2023": { ts: "20230316174702", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
+  "2024": { ts: "20240429230806", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
+  "2025": { ts: "20250524035708", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
 };
 
 function normalizeName(s) {
@@ -24,9 +26,6 @@ function normalizeName(s) {
     .trim();
 }
 
-// Some snapshots have inner regex/string contents that defeat a non-greedy
-// .*? match for playersArray. Walk character-by-character with bracket and
-// quote tracking instead.
 function extractPlayersArrayJson(html) {
   let start = html.indexOf("playersArray");
   if (start < 0) return null;
@@ -76,21 +75,29 @@ async function fetchSnapshot(season, ts, original) {
     throw new Error(`Wayback ${season}: JSON parse failed (${e.message})`);
   }
 
+  // Re-derive rookieRank from superflex value desc so older years (no
+  // rookieRank field) still work and we exactly match KTC's ordering.
+  const rookies = players
+    .filter(p => p.playerName && p.position !== "RDP" && p.position !== "PICK")
+    .map(p => ({ p, value: (p.superflexValues || {}).value || 0 }))
+    .sort((a, b) => b.value - a.value);
+
   const byName = {};
-  for (const p of players) {
-    if (!p.playerName || p.position === "RDP" || p.position === "PICK") continue;
-    const one = p.oneQBValues || {};
-    if (one.rank == null) continue;
+  rookies.forEach(({ p }, idx) => {
+    const sf = p.superflexValues || {};
     byName[normalizeName(p.playerName)] = {
       name: p.playerName,
       position: p.position,
-      rank: one.rank,
-      positionRank: one.positionalRank,
-      value: one.value,
-      rookie: !!p.rookie,
+      rookieRank: idx + 1,
+      value: sf.value,
     };
-  }
-  memCache[season] = { snapshot: ts, players: byName };
+  });
+
+  memCache[season] = {
+    snapshot: ts,
+    pageUrl: `https://web.archive.org/web/${ts}/${original}`,
+    players: byName,
+  };
   return memCache[season];
 }
 

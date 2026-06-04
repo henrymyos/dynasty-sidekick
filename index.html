@@ -1719,39 +1719,29 @@ function renderStats() {
       const snap = state.ktc.seasons && state.ktc.seasons[season.season];
       if (!snap || !snap.players) return;
 
-      const picksThisYear = draft.picks
+      draft.picks
         .filter(p => p.round <= 3)
-        .map(p => {
+        .forEach(p => {
           const sp = state.sleeper.players[p.player_id];
           const playerName = sp ? sp.name : null;
           const ktc = playerName ? snap.players[ktcNormalizeName(playerName)] : null;
           const owner = rosterToOwner(season, p.roster_id);
-          const overall = p.pick_no;
-          return {
+          const row = {
             year: parseInt(season.season, 10),
             slot: `${p.round}.${String(p.draft_slot).padStart(2, "0")}`,
-            overall,
+            overall: p.pick_no,
             drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
             ownerUserId: owner ? owner.user_id : null,
             playerName: playerName || ("Player " + p.player_id),
             position: sp ? sp.position : (ktc ? ktc.position : null),
             ktcValue: ktc ? ktc.value : null,
-            ktcRank: ktc ? ktc.rank : null,
           };
+          if (ktc && ktc.rookieRank != null) {
+            row.adpOverall = ktc.rookieRank;
+            row.diff = p.pick_no - ktc.rookieRank;  // negative = reach
+          }
+          pickRows.push(row);
         });
-      // ADP overall = rank within matched picks of this draft when sorted by KTC value desc.
-      const matched = picksThisYear.filter(p => p.ktcRank != null);
-      matched.sort((a, b) => a.ktcRank - b.ktcRank);
-      const adpByKey = {};
-      matched.forEach((p, idx) => { adpByKey[p.playerName + "|" + p.year] = idx + 1; });
-      picksThisYear.forEach(p => {
-        const key = p.playerName + "|" + p.year;
-        if (adpByKey[key] != null) {
-          p.adpOverall = adpByKey[key];
-          p.diff = p.overall - p.adpOverall;  // negative = reach (taken earlier than ADP)
-        }
-      });
-      pickRows.push(...picksThisYear);
     });
 
     const rows = pickRows.filter(p => p.diff != null);
@@ -1805,20 +1795,29 @@ function renderStats() {
       adpCard.appendChild(renderAdpList(reaches));
     }
 
-    const meta = el("div", { class: "pct", style: "margin-top:14px" });
-    const lines = ["Snapshots used:"];
-    Object.entries(state.ktc.seasons || {}).forEach(([year, info]) => {
+    const meta = el("div", { class: "pct", style: "margin-top:14px; line-height: 1.7" });
+    meta.appendChild(el("span", {}, "Snapshots used "));
+    meta.appendChild(el("span", { style: "color:var(--muted)" }, "(click to verify on Wayback):"));
+    meta.appendChild(el("br", {}));
+    Object.entries(state.ktc.seasons || {}).forEach(([year, info], idx) => {
       const ts = info.snapshot || "—";
       const date = ts.length >= 8 ? `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}` : ts;
-      const err = info.error ? ` (${info.error})` : "";
       const ct = info.players ? Object.keys(info.players).length : 0;
-      lines.push(`${year}: ${date}, ${ct} players${err}`);
+      const url = info.pageUrl;
+      if (idx > 0) meta.appendChild(el("span", {}, "  ·  "));
+      if (url) {
+        meta.appendChild(el("a", { href: url, target: "_blank", rel: "noopener", style: "color:var(--accent)" },
+          `${year}: ${date}`));
+      } else {
+        meta.appendChild(el("span", {}, `${year}: ${date}`));
+      }
+      meta.appendChild(el("span", { style: "color:var(--muted)" }, ` (${ct})`));
+      if (info.error) meta.appendChild(el("span", { class: "delta-neg" }, ` — ${info.error}`));
     });
-    meta.textContent = lines.join("  ·  ");
     adpCard.appendChild(meta);
 
-    adpCard.appendChild(el("div", { class: "pct", style: "margin-top:6px" },
-      "ADP overall = rank when the draft's matched picks are sorted by KTC dynasty value (1QB / 12-team). " +
+    adpCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
+      "ADP = KTC superflex rookie rank (their canonical site value, derived from SF dynasty value). " +
       "Diff = actual pick − ADP. Negative = reached (taken earlier than KTC said); positive = steal."
     ));
   }

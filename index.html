@@ -793,6 +793,7 @@ let state = {
   draft: {
     data: null,
     ktcLive: null,
+    ktcDynasty: null,
     loading: false,
     error: null,
     myUserId: (() => { try { return localStorage.getItem(LS_DRAFT_USER); } catch { return null; } })(),
@@ -2584,14 +2585,24 @@ async function loadDraftLive() {
   state.draft.loading = true;
   state.draft.error = null;
   try {
-    const [draftRes, ktcRes] = await Promise.all([
+    const fetches = [
       fetch("/api/draft-live?_=" + Date.now(), { cache: "no-store" }),
       fetch("/api/ktc-live", { cache: "no-store" }),
-    ]);
+    ];
+    // KTC dynasty data changes slowly — only fetch on first load or manual refresh.
+    if (!state.draft.ktcDynasty) {
+      fetches.push(fetch("/api/ktc-dynasty", { cache: "no-store" }));
+    }
+    const results = await Promise.all(fetches);
+    const [draftRes, ktcRes, dynRes] = results;
     if (!draftRes.ok) throw new Error("draft " + draftRes.status);
     if (!ktcRes.ok) throw new Error("ktc " + ktcRes.status);
     state.draft.data = await draftRes.json();
     state.draft.ktcLive = await ktcRes.json();
+    if (dynRes) {
+      if (!dynRes.ok) throw new Error("dynasty " + dynRes.status);
+      state.draft.ktcDynasty = await dynRes.json();
+    }
     state.draft.lastPoll = new Date();
     if (state.draft.data.error) throw new Error(state.draft.data.error);
   } catch (e) {
@@ -2777,28 +2788,34 @@ function renderDraftWorkspace() {
     });
   });
 
-  // Position-need calculation
+  // Position-need calculation. Value each roster's players using KTC superflex
+  // dynasty values per position, then compare against the league average.
   const POS_LIST = ["QB", "RB", "WR", "TE"];
-  const teamCounts = {};
+  const dyn = (state.draft.ktcDynasty && state.draft.ktcDynasty.players) || {};
+  const teamValues = {};   // roster_id -> { QB: total_value, RB:, WR:, TE: }
   d.rosters.forEach(r => {
-    teamCounts[r.roster_id] = { QB: 0, RB: 0, WR: 0, TE: 0 };
+    teamValues[r.roster_id] = { QB: 0, RB: 0, WR: 0, TE: 0 };
     (r.players || []).forEach(pid => {
       const pl = d.players[pid];
-      if (pl && POS_LIST.includes(pl.position)) {
-        teamCounts[r.roster_id][pl.position]++;
-      }
+      if (!pl || !POS_LIST.includes(pl.position)) return;
+      const ktcEntry = dyn[ktcNorm(pl.name)];
+      const v = ktcEntry ? (ktcEntry.value || 0) : 0;
+      teamValues[r.roster_id][pl.position] += v;
     });
   });
-  const leagueAvg = { QB: 0, RB: 0, WR: 0, TE: 0 };
-  Object.values(teamCounts).forEach(c => POS_LIST.forEach(p => leagueAvg[p] += c[p]));
-  POS_LIST.forEach(p => leagueAvg[p] /= d.rosters.length || 1);
+  const leagueAvgValue = { QB: 0, RB: 0, WR: 0, TE: 0 };
+  Object.values(teamValues).forEach(v => POS_LIST.forEach(p => leagueAvgValue[p] += v[p]));
+  const nTeams = d.rosters.length || 1;
+  POS_LIST.forEach(p => leagueAvgValue[p] /= nTeams);
 
-  const myCounts = (myRosterId != null && teamCounts[myRosterId]) || { QB: 0, RB: 0, WR: 0, TE: 0 };
+  const myValues = (myRosterId != null && teamValues[myRosterId]) || { QB: 0, RB: 0, WR: 0, TE: 0 };
+  // Boost = 1 + max(0, deficit / league_avg). Capped at 1.6× to avoid runaway
+  // for a position where the user has zero value.
   const posBoost = {};
   POS_LIST.forEach(p => {
-    const ratio = leagueAvg[p] > 0 ? myCounts[p] / leagueAvg[p] : 1;
-    // Below 0.8 of avg → 25% boost; below 0.6 of avg → 40% boost.
-    posBoost[p] = ratio < 0.6 ? 1.4 : ratio < 0.8 ? 1.25 : ratio < 1 ? 1.10 : 1.0;
+    if (leagueAvgValue[p] <= 0) { posBoost[p] = 1; return; }
+    const deficit = (leagueAvgValue[p] - myValues[p]) / leagueAvgValue[p];
+    posBoost[p] = 1 + Math.max(0, Math.min(0.6, deficit));
   });
 
   function scoreFor(p) {
@@ -2834,11 +2851,17 @@ function renderDraftWorkspace() {
 
   if (state.draft.posMode) {
     const needLine = el("div", { class: "pct", style: "margin-bottom:10px" });
-    needLine.textContent = "Your positional gap: " + POS_LIST.map(p => {
-      const me = (myCounts[p] || 0).toFixed(0);
-      const avg = leagueAvg[p].toFixed(1);
-      return `${p} ${me}/${avg}`;
-    }).join("  ·  ");
+    if (!state.draft.ktcDynasty) {
+      needLine.textContent = "Loading KTC dynasty values for team valuation…";
+    } else {
+      needLine.textContent = "Your value vs league avg by position: " + POS_LIST.map(p => {
+        const me = Math.round(myValues[p]);
+        const avg = Math.round(leagueAvgValue[p]);
+        const delta = me - avg;
+        const sign = delta >= 0 ? "+" : "";
+        return `${p} ${me} (${sign}${delta} vs ${avg})`;
+      }).join("  ·  ");
+    }
     recCard.appendChild(needLine);
   }
 

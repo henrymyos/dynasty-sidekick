@@ -14,7 +14,11 @@ const SEASON_SNAPSHOTS = {
   "2020": { ts: "20201126095831", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
   "2021": { ts: "20210503211711", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
   "2022": { ts: "20220628220026", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
-  "2023": { ts: "20230611042610", original: "https://keeptradecut.com/" },
+  // No KTC rookie-rankings snapshot exists in May/June 2023; Wayback redirects
+  // to the closest one (Mar 16) regardless. Point both API and link at Mar 16
+  // so the displayed numbers match what the verify-link shows. Caveat: this is
+  // pre-NFL-draft data, where Will Levis was still a top-10 rookie consensus.
+  "2023": { ts: "20230316174702", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
   "2024": { ts: "20240609032233", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
   "2025": { ts: "20250615024724", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
 };

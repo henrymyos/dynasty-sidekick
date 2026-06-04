@@ -7,13 +7,16 @@
 // (pre-2021) don't carry a rookieRank field, so we always re-derive it by
 // sorting rookies on `superflexValues.value` desc — the same way KTC does.
 
+// Snapshots aimed at each year's actual fantasy rookie draft date (per Sleeper
+// last_picked timestamps). For 2023 no rookie-rankings page snapshot exists
+// near the draft date, so we use the site root which embeds the same data.
 const SEASON_SNAPSHOTS = {
   "2020": { ts: "20201126095831", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
   "2021": { ts: "20210503211711", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
   "2022": { ts: "20220628220026", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
-  "2023": { ts: "20230316174702", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
-  "2024": { ts: "20240429230806", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
-  "2025": { ts: "20250524035708", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
+  "2023": { ts: "20230611042610", original: "https://keeptradecut.com/" },
+  "2024": { ts: "20240609032233", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
+  "2025": { ts: "20250615024724", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
 };
 
 function normalizeName(s) {
@@ -55,14 +58,25 @@ function extractPlayersArrayJson(html) {
 
 const memCache = {};
 
+async function fetchWithRetry(url, attempts = 3) {
+  let lastStatus = 0;
+  for (let i = 0; i < attempts; i++) {
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 draft-picks-bot" },
+    });
+    if (r.ok) return r;
+    lastStatus = r.status;
+    if (r.status !== 429 && r.status !== 503) throw new Error("HTTP " + r.status);
+    await new Promise(res => setTimeout(res, 800 * (i + 1)));
+  }
+  throw new Error("HTTP " + lastStatus + " after retries");
+}
+
 async function fetchSnapshot(season, ts, original) {
   if (memCache[season]) return memCache[season];
 
   const url = `https://web.archive.org/web/${ts}/${original}`;
-  const r = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 draft-picks-bot" },
-  });
-  if (!r.ok) throw new Error(`Wayback ${season}: HTTP ${r.status}`);
+  const r = await fetchWithRetry(url);
   const html = await r.text();
 
   const arrJson = extractPlayersArrayJson(html);
@@ -77,8 +91,10 @@ async function fetchSnapshot(season, ts, original) {
 
   // Re-derive rookieRank from superflex value desc so older years (no
   // rookieRank field) still work and we exactly match KTC's ordering.
+  // Filter to rookies only — the rookie-rankings page is already filtered
+  // but the dynasty-rankings / root snapshot includes vets too.
   const rookies = players
-    .filter(p => p.playerName && p.position !== "RDP" && p.position !== "PICK")
+    .filter(p => p.playerName && p.position !== "RDP" && p.position !== "PICK" && p.rookie)
     .map(p => ({ p, value: (p.superflexValues || {}).value || 0 }))
     .sort((a, b) => b.value - a.value);
 

@@ -625,6 +625,21 @@
   .trade-player { font-weight: 500; }
   .trade-where { color: var(--muted); font-size: 12px; margin-left: auto; }
   .trade-resolved { color: var(--muted); font-size: 13px; }
+  .auto-grade-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .auto-big-hit { background: rgba(46,160,67,0.30); color: #74e08c; }
+  .auto-hit { background: rgba(46,160,67,0.15); color: var(--hit); }
+  .auto-meh { background: rgba(210,153,34,0.15); color: var(--meh); }
+  .auto-miss { background: rgba(248,81,73,0.15); color: var(--miss); }
+  .auto-big-miss { background: rgba(248,81,73,0.30); color: #ff7e74; }
+  .auto-pending { background: var(--panel-2); color: var(--muted); }
+
   .trade-value-tag {
     margin-left: auto;
     font-size: 12px;
@@ -833,6 +848,9 @@ let state = {
   tradeHistory: null,
   tradeHistoryLoading: false,
   tradeHistoryError: null,
+  ktcDynasty: null,        // current KTC dynasty values (shared across views)
+  ktcDynastyLoading: false,
+  ktcDynastyError: null,
 };
 
 function rgbToHex(bg) {
@@ -2014,6 +2032,133 @@ function renderStats() {
   main.appendChild(el("div", { class: "section-header" }, "Strategy Signals",
     el("span", { class: "section-sub" }, "Does beating consensus work?")));
 
+  // ----- Card: Auto-Graded Picks (KTC-based) -----
+  ensureKtcDynastyLoaded();
+  const agCard = el("div", { class: "card" }, el("h2", {}, "Auto-Graded Picks (KTC-Based)"));
+  if (!state.sleeper) {
+    agCard.appendChild(el("div", { class: "empty" },
+      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
+  } else if (!state.ktcDynasty) {
+    agCard.appendChild(el("div", { class: "empty" },
+      state.ktcDynastyError ? "KTC dynasty error: " + state.ktcDynastyError : "Loading KTC dynasty values…"));
+  } else {
+    const baselines = buildSlotBaselines() || {};
+    const dynPlayers = state.ktcDynasty.players || {};
+
+    // For each past rookie pick: look up current value, compute grade.
+    const gradedPicks = [];
+    state.sleeper.seasons.forEach(season => {
+      const draft = rookieDraftFor(season);
+      if (!draft) return;
+      draft.picks.filter(p => p.round <= 3).forEach(p => {
+        const sp = state.sleeper.players[p.player_id];
+        if (!sp) return;
+        const entry = dynPlayers[ktcNormalizeName(sp.name)];
+        const currentValue = entry ? entry.value : null;
+        const slot = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
+        const baseline = baselines[slot];
+        const grade = autoGrade(currentValue, baseline);
+        const owner = rosterToOwner(season, p.roster_id);
+        gradedPicks.push({
+          year: parseInt(season.season, 10),
+          slot,
+          overall: p.pick_no,
+          drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
+          playerName: sp.name,
+          position: sp.position,
+          currentValue, baseline,
+          surplus: currentValue && baseline ? currentValue - baseline : null,
+          ...grade,
+        });
+      });
+    });
+    const graded = gradedPicks.filter(g => g.grade);
+
+    // Distribution + lede
+    const counts = { "Big Hit": 0, "Hit": 0, "Meh": 0, "Miss": 0, "Big Miss": 0 };
+    graded.forEach(g => { counts[g.grade]++; });
+    const ledeBits = [];
+    ["Big Hit", "Hit", "Meh", "Miss", "Big Miss"].forEach(g => {
+      if (counts[g]) ledeBits.push(`<strong>${counts[g]}</strong> ${g}`);
+    });
+    const lede = el("div", { class: "card-lede" });
+    lede.innerHTML = ledeBits.join("  ·  ") || "No graded picks yet.";
+    agCard.appendChild(lede);
+
+    // Per-drafter summary
+    const byDrafter = {};
+    graded.forEach(g => {
+      (byDrafter[g.drafter] = byDrafter[g.drafter] || { drafter: g.drafter, picks: 0, hits: 0, mehs: 0, misses: 0, sumScore: 0 });
+      byDrafter[g.drafter].picks++;
+      if (g.magnitude > 0) byDrafter[g.drafter].hits++;
+      else if (g.magnitude < 0) byDrafter[g.drafter].misses++;
+      else byDrafter[g.drafter].mehs++;
+      byDrafter[g.drafter].sumScore += g.magnitude;
+    });
+    const agTable = el("table", {},
+      el("thead", {}, el("tr", {},
+        el("th", {}, "Drafter"),
+        el("th", { class: "num" }, "Picks"),
+        el("th", { class: "num tight" }, "Hit"),
+        el("th", { class: "num tight" }, "Meh"),
+        el("th", { class: "num tight" }, "Miss"),
+        el("th", { class: "num tight gap-left" }, "Avg Score"),
+      )),
+    );
+    const agBody = el("tbody", {});
+    Object.values(byDrafter)
+      .map(s => ({ ...s, avg: s.sumScore / s.picks }))
+      .sort((a, b) => b.avg - a.avg)
+      .forEach(r => {
+        agBody.appendChild(el("tr", {},
+          el("td", {}, r.drafter),
+          el("td", { class: "num" }, String(r.picks)),
+          el("td", { class: "num tight" }, String(r.hits)),
+          el("td", { class: "num tight" }, String(r.mehs)),
+          el("td", { class: "num tight" }, String(r.misses)),
+          el("td", { class: "num tight gap-left" },
+            el("span", { class: r.avg >= 0 ? "delta-pos" : "delta-neg" },
+              (r.avg >= 0 ? "+" : "") + r.avg.toFixed(2))),
+        ));
+      });
+    agTable.appendChild(agBody);
+    agCard.appendChild(agTable);
+
+    // Biggest hits and biggest misses
+    function renderGradeList(rows) {
+      const wrap = el("div", { class: "surplus-list" });
+      rows.forEach(g => {
+        wrap.appendChild(el("div", { class: "surplus-row" },
+          el("span", { class: "surplus-slot" }, `${g.year} · ${g.slot}`),
+          el("span", { class: "surplus-player" },
+            g.playerName,
+            g.position
+              ? el("span", { class: "pos-chip " + positionClass(g.position), style: "margin-left:8px" }, g.position)
+              : null,
+            el("span", { class: "auto-grade-chip " + autoGradeClass(g.magnitude), style: "margin-left:8px" }, g.grade),
+          ),
+          el("span", { class: "surplus-by" }, "by " + g.drafter),
+          el("span", { class: "surplus-delta " + (g.surplusPct >= 0 ? "delta-pos" : "delta-neg") },
+            (g.surplusPct >= 0 ? "+" : "") + Math.round(g.surplusPct * 100) + "%"),
+        ));
+      });
+      return wrap;
+    }
+
+    const sortedBySurplus = graded.slice().sort((a, b) => b.surplusPct - a.surplusPct);
+    agCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest hits (value above slot baseline)"));
+    agCard.appendChild(renderGradeList(sortedBySurplus.slice(0, 8)));
+    agCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest misses (value below slot baseline)"));
+    agCard.appendChild(renderGradeList(sortedBySurplus.slice(-8).reverse()));
+
+    agCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
+      "Slot baseline = median current KTC superflex value of all picks ever taken at that slot. " +
+      "Surplus % = (player's current value − baseline) ÷ baseline. " +
+      "Big Hit ≥ +50%, Hit ≥ +15%, Meh between ±15%, Miss < −15%, Big Miss < −50%."
+    ));
+  }
+  main.appendChild(agCard);
+
   // ----- Card: ADP vs Pick (KeepTradeCut) -----
   const adpCard = el("div", { class: "card" }, el("h2", {}, "ADP vs Pick (KeepTradeCut)"));
   if (!state.sleeper) {
@@ -2252,6 +2397,79 @@ async function loadTradeHistory() {
 }
 function ensureTradeHistoryLoaded() {
   if (!state.tradeHistory && !state.tradeHistoryLoading && !state.tradeHistoryError) loadTradeHistory();
+}
+
+async function loadKtcDynasty() {
+  if (state.ktcDynastyLoading || state.ktcDynasty) return;
+  state.ktcDynastyLoading = true;
+  state.ktcDynastyError = null;
+  render();
+  try {
+    const res = await fetch("/api/ktc-dynasty", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.ktcDynasty = data;
+  } catch (e) {
+    state.ktcDynastyError = e.message;
+  } finally {
+    state.ktcDynastyLoading = false;
+    render();
+  }
+}
+function ensureKtcDynastyLoaded() {
+  if (!state.ktcDynasty && !state.ktcDynastyLoading && !state.ktcDynastyError) loadKtcDynasty();
+}
+
+// Build per-slot median current KTC value across all years' rookie drafts.
+function buildSlotBaselines() {
+  if (!state.sleeper || !state.ktcDynasty) return null;
+  const players = state.ktcDynasty.players || {};
+  const slotValues = {};
+  state.sleeper.seasons.forEach(season => {
+    const draft = rookieDraftFor(season);
+    if (!draft) return;
+    draft.picks.filter(p => p.round <= 3).forEach(p => {
+      const sp = state.sleeper.players[p.player_id];
+      if (!sp) return;
+      const entry = players[ktcNormalizeName(sp.name)];
+      if (!entry || !entry.value) return;
+      const slot = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
+      (slotValues[slot] = slotValues[slot] || []).push(entry.value);
+    });
+  });
+  const baselines = {};
+  Object.entries(slotValues).forEach(([slot, vs]) => {
+    const sorted = vs.slice().sort((a, b) => a - b);
+    const m = Math.floor(sorted.length / 2);
+    baselines[slot] = sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+  });
+  return baselines;
+}
+
+// Classify a pick into one of 5 buckets based on its current KTC value vs the
+// median value at that slot across years.
+function autoGrade(currentValue, baselineValue) {
+  if (!baselineValue || baselineValue <= 0 || currentValue == null) {
+    return { grade: null, magnitude: 0, surplusPct: 0 };
+  }
+  const surplusPct = (currentValue - baselineValue) / baselineValue;
+  let grade, magnitude;
+  if (surplusPct >= 0.5) { grade = "Big Hit"; magnitude = 2; }
+  else if (surplusPct >= 0.15) { grade = "Hit"; magnitude = 1; }
+  else if (surplusPct > -0.15) { grade = "Meh"; magnitude = 0; }
+  else if (surplusPct > -0.5) { grade = "Miss"; magnitude = -1; }
+  else { grade = "Big Miss"; magnitude = -2; }
+  return { grade, magnitude, surplusPct };
+}
+
+function autoGradeClass(magnitude) {
+  if (magnitude === 2) return "auto-big-hit";
+  if (magnitude === 1) return "auto-hit";
+  if (magnitude === 0) return "auto-meh";
+  if (magnitude === -1) return "auto-miss";
+  if (magnitude === -2) return "auto-big-miss";
+  return "auto-pending";
 }
 
 // Pick the snapshot whose timestamp is closest to (but not after) the trade time.

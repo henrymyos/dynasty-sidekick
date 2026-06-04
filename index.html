@@ -261,6 +261,7 @@
   .bar-row {
     display: flex;
     height: 6px;
+    min-width: 60px;
     border-radius: 3px;
     overflow: hidden;
     margin-top: 4px;
@@ -546,7 +547,7 @@
     .pick-result { font-size: 10px; padding: 2px 4px; }
     .round-header { font-size: 11px; }
 
-    .mobile-hide { display: none !important; }
+    /* Keep the Result/Mix bar visible on mobile — tables can scroll horizontally */
 
     footer { padding: 18px 12px; font-size: 11px; }
   }

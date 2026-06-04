@@ -654,6 +654,7 @@ let state = {
   leaderboardRound: null,
   statsRound: null,
   statsInsightDrafter: null,
+  bestPosMetric: "hit",  // "hit" or "hm"
   sleeper: null,            // {seasons, players}
   sleeperLoading: false,
   sleeperError: null,
@@ -1396,6 +1397,27 @@ function renderStats() {
 
   // ----- Card: Position × Section grid (where each position pays off) -----
   const psCard = el("div", { class: "card" }, el("h2", {}, "Best Position per Section"));
+  const psControls = el("div", { class: "controls" });
+  const psMetricOpts = [
+    { value: "hit", label: "Hit %" },
+    { value: "hm", label: "Hit + Meh %" },
+  ];
+  psControls.appendChild(customSelect(psMetricOpts, state.bestPosMetric, v => {
+    state.bestPosMetric = v;
+    render();
+  }));
+  psCard.appendChild(psControls);
+  const psMetricLabel = state.bestPosMetric === "hm" ? "Hit + Meh %" : "Hit %";
+  const psMetric = (t) => {
+    if (!t.graded) return null;
+    return state.bestPosMetric === "hm" ? (t.hit + t.meh) / t.graded : t.hit / t.graded;
+  };
+  const psMetricFormat = (t) => {
+    if (!t.graded) return "—";
+    return state.bestPosMetric === "hm"
+      ? formatPct(t.hit + t.meh, t.graded)
+      : formatPct(t.hit, t.graded);
+  };
   const PS_POSITIONS = ["QB", "RB", "WR", "TE"];
   const PS_SECTIONS = [
     { round: 1, tier: "Early", label: "R1 Early", slots: "1.01–1.04" },
@@ -1427,11 +1449,11 @@ function renderStats() {
     const posData = PS_POSITIONS.map(pos => {
       const subset = sectionPicks.filter(p => p.pos === pos);
       const t = tally(subset);
-      return { pos, t, hitPct: t.graded ? t.hit / t.graded : null };
+      return { pos, t, metric: psMetric(t) };
     });
-    const valid = posData.filter(d => d.hitPct !== null && d.t.total >= MIN_SAMPLE);
+    const valid = posData.filter(d => d.metric !== null && d.t.total >= MIN_SAMPLE);
     const bestPos = valid.length
-      ? valid.reduce((a, b) => (b.hitPct > a.hitPct ? b : a)).pos
+      ? valid.reduce((a, b) => (b.metric > a.metric ? b : a)).pos
       : null;
     psBody.appendChild(el("tr", {},
       el("td", {},
@@ -1441,11 +1463,11 @@ function renderStats() {
       ...posData.map(d => {
         const isBest = d.pos === bestPos;
         const cellClass = "num tight" + (isBest ? " cell-best" : "");
-        if (d.hitPct === null) {
+        if (d.metric === null) {
           return el("td", { class: cellClass + " pct" }, "—");
         }
         return el("td", { class: cellClass },
-          formatPct(d.t.hit, d.t.graded),
+          psMetricFormat(d.t),
           el("span", { class: "pct", style: "margin-left:4px" }, "(" + d.t.total + ")"),
         );
       }),
@@ -1460,7 +1482,7 @@ function renderStats() {
     el("thead", {}, el("tr", {},
       el("th", {}, "Position"),
       el("th", {}, "Best Section"),
-      el("th", { class: "num tight" }, "Hit %"),
+      el("th", { class: "num tight" }, psMetricLabel),
       el("th", { class: "num tight" }, "Sample"),
     )),
   );
@@ -1473,8 +1495,8 @@ function renderStats() {
         && p.pos === pos
       );
       const t = tally(subset);
-      return { section, t, hitPct: t.graded ? t.hit / t.graded : null };
-    }).filter(s => s.t.total >= MIN_SAMPLE && s.hitPct !== null);
+      return { section, t, metric: psMetric(t) };
+    }).filter(s => s.t.total >= MIN_SAMPLE && s.metric !== null);
     if (!sectionsHit.length) {
       sumBody.appendChild(el("tr", {},
         el("td", {},
@@ -1487,7 +1509,7 @@ function renderStats() {
       ));
       return;
     }
-    const best = sectionsHit.reduce((a, b) => (b.hitPct > a.hitPct ? b : a));
+    const best = sectionsHit.reduce((a, b) => (b.metric > a.metric ? b : a));
     sumBody.appendChild(el("tr", {},
       el("td", {},
         el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
@@ -1497,7 +1519,7 @@ function renderStats() {
         best.section.label,
         el("span", { class: "pct", style: "margin-left:8px" }, best.section.slots)
       ),
-      el("td", { class: "num tight" }, formatPct(best.t.hit, best.t.graded)),
+      el("td", { class: "num tight" }, psMetricFormat(best.t)),
       el("td", { class: "num tight" }, String(best.t.total)),
     ));
   });

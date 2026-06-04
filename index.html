@@ -2974,9 +2974,17 @@ function renderDraftWorkspace() {
       );
       const list = el("div", { class: "roster-list" });
       byPos[pos]
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .forEach(pl => {
-          list.appendChild(el("div", { class: "roster-chip" + (pl.rookie ? " is-rookie" : "") }, pl.name));
+        .map(pl => {
+          const entry = dyn[ktcNorm(pl.name)];
+          return { pl, value: entry ? (entry.value || 0) : 0 };
+        })
+        .sort((a, b) => b.value - a.value)
+        .forEach(({ pl, value }) => {
+          const chip = el("div", { class: "roster-chip" + (pl.rookie ? " is-rookie" : "") }, pl.name);
+          if (value) {
+            chip.appendChild(el("span", { style: "color:var(--muted); margin-left:6px; font-size:11px" }, String(value)));
+          }
+          list.appendChild(chip);
         });
       sec.appendChild(list);
       rosterCard.appendChild(sec);

@@ -2064,6 +2064,7 @@ function renderStats() {
           draftYear: year,
           slot,
           round: p.round,
+          position: sp.position,
         }, ktcBaselines);
         const owner = rosterToOwner(season, p.roster_id);
         gradedPicks.push({
@@ -2215,7 +2216,8 @@ function renderStats() {
 
     agCard.appendChild(el("div", { class: "pct", style: "margin-top:14px" },
       "Composite = 60% × positional score + 40% × KTC-value score. " +
-      "Positional score uses the avg of each pick's best-5 league-scored positional finishes vs round-aware tiers (R1 ≤ 12 to hit, R2 ≤ 24, R3 ≤ 36). " +
+      "Positional score uses the avg of each pick's best-5 league-scored positional finishes vs round-aware tiers (RB/WR: R1 ≤ 12 to hit, R2 ≤ 24, R3 ≤ 36). " +
+      "QB and TE thresholds are halved (R1 ≤ 6 to hit, R2 ≤ 12, R3 ≤ 18) since only ~12 startable bodies exist at each. " +
       "KTC score uses each pick's avg historical superflex value vs the slot baseline (±15% / ±50% buckets). " +
       "Final composite is bucketed to Big Hit / Hit / Meh / Miss / Big Miss; the vs-manual compare collapses to your sheet's 3-tier Hit/Meh/Miss."
     ));
@@ -2537,13 +2539,19 @@ const ROUND_TIERS = {
   3: { bigHit: 18, hit: 36, meh: 48, miss: 60 },
 };
 
-function autoGradeByPosRank(rank, round) {
+// Position scarcity multiplier — QBs and TEs only have ~12 startable bodies
+// across the league, so reaching pos 12 at QB is roughly as valuable as
+// pos 24 at RB or WR. Halve the round tier thresholds for QB and TE.
+const POSITION_TIER_MULT = { QB: 0.5, TE: 0.5, RB: 1.0, WR: 1.0 };
+
+function autoGradeByPosRank(rank, round, position) {
   const t = ROUND_TIERS[round] || ROUND_TIERS[3];
+  const m = POSITION_TIER_MULT[position] != null ? POSITION_TIER_MULT[position] : 1.0;
   if (rank == null) return { grade: null, magnitude: 0 };
-  if (rank <= t.bigHit) return { grade: "Big Hit", magnitude: 2 };
-  if (rank <= t.hit) return { grade: "Hit", magnitude: 1 };
-  if (rank <= t.meh) return { grade: "Meh", magnitude: 0 };
-  if (rank <= t.miss) return { grade: "Miss", magnitude: -1 };
+  if (rank <= t.bigHit * m) return { grade: "Big Hit", magnitude: 2 };
+  if (rank <= t.hit * m) return { grade: "Hit", magnitude: 1 };
+  if (rank <= t.meh * m) return { grade: "Meh", magnitude: 0 };
+  if (rank <= t.miss * m) return { grade: "Miss", magnitude: -1 };
   return { grade: "Big Miss", magnitude: -2 };
 }
 
@@ -2617,11 +2625,11 @@ function bucketize(score) {
 // Composite auto-grade combining the positional-finish score (60%) and the
 // KTC-value score (40%). Falls back to whichever signal is available when one
 // is missing.
-function compositeAutoGrade({ playerId, playerName, draftYear, slot, round }, ktcBaselines) {
+function compositeAutoGrade({ playerId, playerName, draftYear, slot, round, position }, ktcBaselines) {
   const posCareer = top5AvgRankSinceDraft(playerId, draftYear);
   const enoughSample = posCareer && posCareer.totalGames >= 4 && posCareer.avgRank != null;
   const posMag = enoughSample
-    ? autoGradeByPosRank(posCareer.avgRank, round).magnitude
+    ? autoGradeByPosRank(posCareer.avgRank, round, position).magnitude
     : null;
   const ktc = ktcScoreFor(playerName, draftYear, slot, ktcBaselines);
   let composite;

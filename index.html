@@ -2173,6 +2173,40 @@ function renderStats() {
     agCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest misses"));
     agCard.appendChild(renderGradeList(sortedByComposite.slice(-8).reverse()));
 
+    // Expandable: every graded pick. Defaults to collapsed so the card stays
+    // skimmable; click "Show all" to drop the full list.
+    const details = el("details", { style: "margin-top:20px" });
+    const summary = el("summary", {
+      style: "cursor:pointer; font-size: 14px; font-weight: 600; color: var(--accent); padding: 6px 0; user-select: none;",
+    }, `Show all ${sortedByComposite.length} graded picks`);
+    details.appendChild(summary);
+    const allBody = el("div", {});
+    const byYear = sortedByComposite.slice().sort((a, b) => {
+      if (a.year !== b.year) return a.year - b.year;
+      return a.overall - b.overall;
+    });
+    let currentYear = null;
+    let currentRound = null;
+    let yearGroup = null;
+    byYear.forEach(g => {
+      if (g.year !== currentYear) {
+        currentYear = g.year;
+        currentRound = null;
+        yearGroup = el("div", { style: "margin-top:10px" });
+        yearGroup.appendChild(el("div", {
+          style: "font-size: 14px; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); padding: 6px 0; margin-bottom: 4px;",
+        }, g.year + " Draft"));
+        allBody.appendChild(yearGroup);
+      }
+      if (g.round !== currentRound) {
+        currentRound = g.round;
+        yearGroup.appendChild(el("div", { class: "round-header" }, "Round " + g.round));
+      }
+      yearGroup.appendChild(renderGradeList([g]).firstChild);
+    });
+    details.appendChild(allBody);
+    agCard.appendChild(details);
+
     // Comparison vs your manual grades from the sheet
     const sheetByKey = {};
     state.picks.forEach(sp => {

@@ -2075,8 +2075,9 @@ function renderStats() {
           drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
           playerName: sp.name,
           position: sp.position,
-          avgRank: composite.posCareer ? composite.posCareer.avgRank : null,
-          seasons: composite.posCareer ? composite.posCareer.seasons : 0,
+          bestRank: composite.posCareer ? composite.posCareer.bestRank : null,
+          bestSeason: composite.posCareer ? composite.posCareer.bestSeason : null,
+          gradedSeasons: composite.posCareer ? composite.posCareer.gradedSeasons : 0,
           games: composite.posCareer ? composite.posCareer.totalGames : 0,
           ktcSurplus: composite.ktcSurplus,
           posMag: composite.posMag,
@@ -2144,7 +2145,9 @@ function renderStats() {
       const wrap = el("div", { class: "surplus-list" });
       rows.forEach(g => {
         const bits = [];
-        if (g.avgRank != null) bits.push(`${g.position}${g.avgRank.toFixed(1)}`);
+        if (g.bestRank != null) {
+          bits.push(`Best: ${g.position}${g.bestRank}` + (g.bestSeason ? ` (${g.bestSeason})` : ""));
+        }
         if (g.ktcSurplus != null) bits.push(`KTC ${(g.ktcSurplus >= 0 ? "+" : "") + Math.round(g.ktcSurplus * 100)}%`);
         const subLabel = bits.length ? bits.join("  ·  ") : "—";
         wrap.appendChild(el("div", { class: "surplus-row" },
@@ -2216,8 +2219,10 @@ function renderStats() {
 
     agCard.appendChild(el("div", { class: "pct", style: "margin-top:14px" },
       "Composite = 60% × positional score + 40% × KTC-value score. " +
-      "Positional score uses the avg of each pick's best-5 league-scored positional finishes vs round-aware tiers (RB/WR: R1 ≤ 12 to hit, R2 ≤ 24, R3 ≤ 36). " +
-      "QB and TE thresholds are halved (R1 ≤ 6 to hit, R2 ≤ 12, R3 ≤ 18) since only ~12 startable bodies exist at each. " +
+      "Positional score uses each pick's best single league-scored positional finish since draft. " +
+      "Hit thresholds scale with round: R1 ≤ 12 (RB/WR) or ≤ 6 (QB/TE), R2 ≤ 24 / ≤ 12, R3 ≤ 36 / ≤ 18. " +
+      "Meh / Miss floors are round-independent: top 36 (RB/WR) or top 24 (QB/TE) = at least Meh, top 60 / 40 = at least Miss. " +
+      "So a usable but unspectacular career still grades Meh regardless of where it was drafted. " +
       "KTC score uses each pick's avg historical superflex value vs the slot baseline (±15% / ±50% buckets). " +
       "Final composite is bucketed to Big Hit / Hit / Meh / Miss / Big Miss; the vs-manual compare collapses to your sheet's 3-tier Hit/Meh/Miss."
     ));
@@ -2508,26 +2513,28 @@ function ensurePlayerStatsLoaded() {
   if (!state.playerStats && !state.playerStatsLoading && !state.playerStatsError) loadPlayerStats();
 }
 
-// Average of the player's BEST FIVE league-scored positional ranks since draft.
-// If they have fewer than five graded seasons, we extrapolate the missing
-// slots by assuming each one matches the player's running average — which
-// mathematically reduces to just averaging the seasons they do have.
-function top5AvgRankSinceDraft(playerId, draftYear) {
+// Best (lowest) league-scored positional rank a player has reached since draft.
+// Returns null if they never appeared in stats since the draft year.
+function bestRankSinceDraft(playerId, draftYear) {
   if (!state.playerStats || !state.playerStats.seasons) return null;
-  const ranks = [];
+  let bestRank = null;
+  let bestSeason = null;
   let totalGames = 0;
+  let gradedSeasons = 0;
   Object.entries(state.playerStats.seasons).forEach(([season, players]) => {
     if (parseInt(season, 10) < draftYear) return;
     const s = players && players[playerId];
     if (!s) return;
     totalGames += s.games || 0;
-    if (s.pos_rank_league != null) ranks.push({ rank: s.pos_rank_league, season });
+    if (s.pos_rank_league != null) {
+      gradedSeasons++;
+      if (bestRank == null || s.pos_rank_league < bestRank) {
+        bestRank = s.pos_rank_league;
+        bestSeason = season;
+      }
+    }
   });
-  if (!ranks.length) return { avgRank: null, top5: [], seasons: 0, totalGames };
-  ranks.sort((a, b) => a.rank - b.rank);
-  const top5 = ranks.slice(0, 5);
-  const avgRank = top5.reduce((a, r) => a + r.rank, 0) / top5.length;
-  return { avgRank, top5, seasons: ranks.length, totalGames };
+  return { bestRank, bestSeason, totalGames, gradedSeasons };
 }
 
 // Round-based tiers: a 1.xx pick needs to be top-12 at position to "hit", a
@@ -2539,19 +2546,28 @@ const ROUND_TIERS = {
   3: { bigHit: 18, hit: 36, meh: 48, miss: 60 },
 };
 
-// Position scarcity multiplier — QBs and TEs only have ~12 startable bodies
-// across the league, so reaching pos 12 at QB is roughly as valuable as
-// pos 24 at RB or WR. Halve the round tier thresholds for QB and TE.
-const POSITION_TIER_MULT = { QB: 0.5, TE: 0.5, RB: 1.0, WR: 1.0 };
+// Top tiers (Big Hit / Hit) scale by round AND position scarcity — QB and TE
+// have ~12 startable bodies, so reaching the top there is roughly as valuable
+// as RB/WR top × 2. Meh and Miss floors are round-independent and position-
+// specific: as long as a player had one usable season (top 24 QB/TE, top 36
+// RB/WR), they at least earn a Meh regardless of where they were drafted.
+const POS_TOP_MULT = { QB: 0.5, TE: 0.5, RB: 1.0, WR: 1.0 };
+const POS_USABLE_FLOOR = {
+  QB: { meh: 24, miss: 40 },
+  TE: { meh: 24, miss: 40 },
+  RB: { meh: 36, miss: 60 },
+  WR: { meh: 36, miss: 60 },
+};
 
 function autoGradeByPosRank(rank, round, position) {
-  const t = ROUND_TIERS[round] || ROUND_TIERS[3];
-  const m = POSITION_TIER_MULT[position] != null ? POSITION_TIER_MULT[position] : 1.0;
   if (rank == null) return { grade: null, magnitude: 0 };
+  const t = ROUND_TIERS[round] || ROUND_TIERS[3];
+  const m = POS_TOP_MULT[position] != null ? POS_TOP_MULT[position] : 1.0;
+  const floor = POS_USABLE_FLOOR[position] || POS_USABLE_FLOOR.WR;
   if (rank <= t.bigHit * m) return { grade: "Big Hit", magnitude: 2 };
   if (rank <= t.hit * m) return { grade: "Hit", magnitude: 1 };
-  if (rank <= t.meh * m) return { grade: "Meh", magnitude: 0 };
-  if (rank <= t.miss * m) return { grade: "Miss", magnitude: -1 };
+  if (rank <= floor.meh) return { grade: "Meh", magnitude: 0 };
+  if (rank <= floor.miss) return { grade: "Miss", magnitude: -1 };
   return { grade: "Big Miss", magnitude: -2 };
 }
 
@@ -2626,10 +2642,10 @@ function bucketize(score) {
 // KTC-value score (40%). Falls back to whichever signal is available when one
 // is missing.
 function compositeAutoGrade({ playerId, playerName, draftYear, slot, round, position }, ktcBaselines) {
-  const posCareer = top5AvgRankSinceDraft(playerId, draftYear);
-  const enoughSample = posCareer && posCareer.totalGames >= 4 && posCareer.avgRank != null;
+  const posCareer = bestRankSinceDraft(playerId, draftYear);
+  const enoughSample = posCareer && posCareer.totalGames >= 4 && posCareer.bestRank != null;
   const posMag = enoughSample
-    ? autoGradeByPosRank(posCareer.avgRank, round, position).magnitude
+    ? autoGradeByPosRank(posCareer.bestRank, round, position).magnitude
     : null;
   const ktc = ktcScoreFor(playerName, draftYear, slot, ktcBaselines);
   let composite;

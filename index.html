@@ -2035,9 +2035,9 @@ function renderStats() {
   main.appendChild(el("div", { class: "section-header" }, "Strategy Signals",
     el("span", { class: "section-sub" }, "Does beating consensus work?")));
 
-  // ----- Card: Auto-Graded Picks (career fantasy production vs slot baseline) -----
+  // ----- Card: Auto-Graded Picks (best positional rank vs round tier) -----
   ensurePlayerStatsLoaded();
-  const agCard = el("div", { class: "card" }, el("h2", {}, "Auto-Graded Picks (Career PPG)"));
+  const agCard = el("div", { class: "card" }, el("h2", {}, "Auto-Graded Picks (Best Position Rank)"));
   if (!state.sleeper) {
     agCard.appendChild(el("div", { class: "empty" },
       state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
@@ -2045,8 +2045,6 @@ function renderStats() {
     agCard.appendChild(el("div", { class: "empty" },
       state.playerStatsError ? "Stats error: " + state.playerStatsError : "Loading Sleeper season stats…"));
   } else {
-    const baselines = buildPpgSlotBaselines() || {};
-
     const gradedPicks = [];
     state.sleeper.seasons.forEach(season => {
       const draft = rookieDraftFor(season);
@@ -2055,24 +2053,25 @@ function renderStats() {
       draft.picks.filter(p => p.round <= 3).forEach(p => {
         const sp = state.sleeper.players[p.player_id];
         if (!sp) return;
-        const career = careerPPGSinceDraft(p.player_id, year);
+        const career = bestPosRankSinceDraft(p.player_id, year);
         const slot = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
-        const baseline = baselines[slot];
-        // Skip 2026 picks (no career yet) and anyone with <4 NFL games.
-        const grade = (career && career.totalGames >= 4)
-          ? autoGrade(career.ppg, baseline)
-          : { grade: null, magnitude: 0, surplusPct: 0 };
+        // Skip picks with <4 career games (still rookies, cuts, severe injury).
+        const enoughSample = career && career.totalGames >= 4;
+        const grade = enoughSample
+          ? autoGradeByPosRank(career.bestRank, p.round)
+          : { grade: null, magnitude: 0 };
         const owner = rosterToOwner(season, p.roster_id);
         gradedPicks.push({
           year,
           slot,
+          round: p.round,
           overall: p.pick_no,
           drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
           playerName: sp.name,
           position: sp.position,
-          ppg: career ? career.ppg : 0,
+          bestRank: career ? career.bestRank : null,
+          bestSeason: career ? career.bestSeason : null,
           games: career ? career.totalGames : 0,
-          baseline,
           ...grade,
         });
       });
@@ -2129,10 +2128,13 @@ function renderStats() {
     agTable.appendChild(agBody);
     agCard.appendChild(agTable);
 
-    // Biggest hits and biggest misses
+    // Biggest hits and biggest misses (by relative rank gap vs the round tier)
     function renderGradeList(rows) {
       const wrap = el("div", { class: "surplus-list" });
       rows.forEach(g => {
+        const finishLabel = g.bestRank != null
+          ? `Best: ${g.position}${g.bestRank}` + (g.bestSeason ? ` (${g.bestSeason})` : "")
+          : "—";
         wrap.appendChild(el("div", { class: "surplus-row" },
           el("span", { class: "surplus-slot" }, `${g.year} · ${g.slot}`),
           el("span", { class: "surplus-player" },
@@ -2143,25 +2145,32 @@ function renderStats() {
             el("span", { class: "auto-grade-chip " + autoGradeClass(g.magnitude), style: "margin-left:8px" }, g.grade),
           ),
           el("span", { class: "surplus-by" }, "by " + g.drafter),
-          el("span", { class: "surplus-delta " + (g.surplusPct >= 0 ? "delta-pos" : "delta-neg") },
-            (g.surplusPct >= 0 ? "+" : "") + Math.round(g.surplusPct * 100) + "%"),
+          el("span", { class: "surplus-delta " + (g.magnitude >= 0 ? "delta-pos" : "delta-neg") }, finishLabel),
         ));
       });
       return wrap;
     }
 
-    const sortedBySurplus = graded.slice().sort((a, b) => b.surplusPct - a.surplusPct);
-    agCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest hits (value above slot baseline)"));
+    // Sort by how far the rank beat / missed the round's "hit" threshold.
+    function rankSurplus(g) {
+      if (!g.grade) return null;
+      const tier = ROUND_TIERS[g.round] || ROUND_TIERS[3];
+      // Lower rank = better. Positive = beat hit bar, negative = missed.
+      return tier.hit - g.bestRank;
+    }
+    const sortable = graded.filter(g => rankSurplus(g) != null);
+    const sortedBySurplus = sortable.slice().sort((a, b) => rankSurplus(b) - rankSurplus(a));
+    agCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest hits"));
     agCard.appendChild(renderGradeList(sortedBySurplus.slice(0, 8)));
-    agCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest misses (value below slot baseline)"));
+    agCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest misses"));
     agCard.appendChild(renderGradeList(sortedBySurplus.slice(-8).reverse()));
 
     agCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
-      "Career PPG = total fantasy points since draft (using your league's scoring_settings) ÷ NFL games played. " +
-      "Slot baseline = median career PPG of all picks ever taken at that slot — so a 1.04 has a much higher bar than a 3.04. " +
-      "Surplus % = (player PPG − baseline) ÷ baseline. " +
-      "Big Hit ≥ +50%, Hit ≥ +15%, Meh between ±15%, Miss < −15%, Big Miss < −50%. " +
-      "Picks with fewer than 4 NFL games (rookies, cuts, severe injury) are skipped."
+      "Grade is set by each pick's best positional finish at any point since draft, " +
+      "using your league's scoring_settings to compute fantasy points per season. " +
+      "Round 1: Big Hit ≤ pos 6, Hit ≤ 12, Meh ≤ 24, Miss ≤ 36, Big Miss > 36. " +
+      "Round 2: 12 / 24 / 36 / 48. Round 3: 18 / 36 / 48 / 60. " +
+      "The earlier the pick, the higher the bar to clear."
     ));
   }
   main.appendChild(agCard);
@@ -2450,47 +2459,46 @@ function ensurePlayerStatsLoaded() {
   if (!state.playerStats && !state.playerStatsLoading && !state.playerStatsError) loadPlayerStats();
 }
 
-// Compute a player's league-scored fantasy points per game across all seasons
-// since their draft. Uses pts_league (computed server-side from your league's
-// scoring_settings) and falls back to pts_ppr if that's missing.
-function careerPPGSinceDraft(playerId, draftYear) {
+// Best (lowest) league-scored positional rank a player has hit across any
+// season since their draft. Also returns total games so we can skip picks
+// without meaningful sample.
+function bestPosRankSinceDraft(playerId, draftYear) {
   if (!state.playerStats || !state.playerStats.seasons) return null;
-  let totalPts = 0;
+  let best = null;
+  let bestSeason = null;
   let totalGames = 0;
   Object.entries(state.playerStats.seasons).forEach(([season, players]) => {
     if (parseInt(season, 10) < draftYear) return;
     const s = players && players[playerId];
     if (!s) return;
-    totalPts += (s.pts_league != null ? s.pts_league : (s.pts_ppr || 0));
     totalGames += s.games || 0;
+    if (s.pos_rank_league != null && (best == null || s.pos_rank_league < best)) {
+      best = s.pos_rank_league;
+      bestSeason = season;
+    }
   });
-  return { totalPts, totalGames, ppg: totalGames > 0 ? totalPts / totalGames : 0 };
+  return { bestRank: best, bestSeason, totalGames };
 }
 
-// Build per-slot median career PPG of every pick taken at that slot.
-// Career PPG = total PPR points since the player's draft year ÷ games played.
-function buildPpgSlotBaselines() {
-  if (!state.sleeper || !state.playerStats) return null;
-  const slotValues = {};
-  state.sleeper.seasons.forEach(season => {
-    const draft = rookieDraftFor(season);
-    if (!draft) return;
-    const year = parseInt(season.season, 10);
-    draft.picks.filter(p => p.round <= 3).forEach(p => {
-      const career = careerPPGSinceDraft(p.player_id, year);
-      if (!career || career.totalGames < 4) return;   // skip near-zero samples
-      const slot = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
-      (slotValues[slot] = slotValues[slot] || []).push(career.ppg);
-    });
-  });
-  const baselines = {};
-  Object.entries(slotValues).forEach(([slot, vs]) => {
-    const sorted = vs.slice().sort((a, b) => a - b);
-    const m = Math.floor(sorted.length / 2);
-    baselines[slot] = sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
-  });
-  return baselines;
+// Round-based tiers: a 1.xx pick needs to be top-12 at position to "hit", a
+// 2.xx pick needs top-24, a 3.xx pick top-36. Big Hit and Big Miss bracket
+// each tier by a factor of two. Lower rank = better.
+const ROUND_TIERS = {
+  1: { bigHit: 6, hit: 12, meh: 24, miss: 36 },
+  2: { bigHit: 12, hit: 24, meh: 36, miss: 48 },
+  3: { bigHit: 18, hit: 36, meh: 48, miss: 60 },
+};
+
+function autoGradeByPosRank(rank, round) {
+  const t = ROUND_TIERS[round] || ROUND_TIERS[3];
+  if (rank == null) return { grade: null, magnitude: 0 };
+  if (rank <= t.bigHit) return { grade: "Big Hit", magnitude: 2 };
+  if (rank <= t.hit) return { grade: "Hit", magnitude: 1 };
+  if (rank <= t.meh) return { grade: "Meh", magnitude: 0 };
+  if (rank <= t.miss) return { grade: "Miss", magnitude: -1 };
+  return { grade: "Big Miss", magnitude: -2 };
 }
+
 
 // Classify a pick into one of 5 buckets based on its current KTC value vs the
 // median value at that slot across years.

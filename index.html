@@ -2224,11 +2224,13 @@ function renderTrades() {
   const { seasons, players } = state.sleeper;
   // Use the current (latest) season's users as the canonical roster of managers
   const currentSeason = seasons[seasons.length - 1];
-  const allUsers = currentSeason.users.slice().sort((a, b) => userDisplay(a).localeCompare(userDisplay(b)));
+  const allUsers = currentSeason.users.slice().sort((a, b) =>
+    canonicalOwnerName(userDisplay(a)).localeCompare(canonicalOwnerName(userDisplay(b)))
+  );
 
   if (state.tradesUserId == null && allUsers.length) state.tradesUserId = allUsers[0].user_id;
 
-  const userOpts = allUsers.map(u => ({ value: u.user_id, label: userDisplay(u) }));
+  const userOpts = allUsers.map(u => ({ value: u.user_id, label: canonicalOwnerName(userDisplay(u)) }));
   const controls = el("div", { class: "controls" });
   controls.appendChild(customSelect(userOpts, state.tradesUserId, v => {
     state.tradesUserId = v;
@@ -2271,7 +2273,7 @@ function renderTrades() {
   );
   main.appendChild(stats);
 
-  const card = el("div", { class: "card" }, el("h2", {}, userDisplay(selectedUser) + " — Trade History"));
+  const card = el("div", { class: "card" }, el("h2", {}, canonicalOwnerName(userDisplay(selectedUser)) + " — Trade History"));
 
   if (!userTrades.length) {
     card.appendChild(el("div", { class: "empty" }, "No trades found for this manager."));
@@ -2281,7 +2283,7 @@ function renderTrades() {
 
   userTrades.forEach(({ season, trade, myRosterId }) => {
     const otherRosterIds = trade.roster_ids.filter(r => r !== myRosterId);
-    const otherNames = otherRosterIds.map(rid => userDisplay(rosterToOwner(season, rid))).join(", ");
+    const otherNames = otherRosterIds.map(rid => canonicalOwnerName(userDisplay(rosterToOwner(season, rid)))).join(", ");
 
     const block = el("div", { class: "trade-block" });
     block.appendChild(el("div", { class: "trade-header" },

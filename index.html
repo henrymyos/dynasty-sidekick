@@ -1720,7 +1720,7 @@ function renderStats() {
   // ----- Card: Drafter × Position × Tier -----
   main.appendChild(el("div", { class: "section-header" }, "Drafter Behavior",
     el("span", { class: "section-sub" }, "Per-drafter patterns and sequence effects")));
-  const insightCard = el("div", { class: "card" }, el("h2", {}, "Drafter Insight: Position × Tier"));
+  const insightCard = el("div", { class: "card" }, el("h2", {}, "Drafter Insight: Position × Round"));
   const insightControls = el("div", { class: "controls" });
   const drafterOpts = state.people.map(p => ({ value: p, label: p }));
   if (state.statsInsightDrafter == null && drafterOpts.length) state.statsInsightDrafter = drafterOpts[0].value;
@@ -1735,9 +1735,9 @@ function renderStats() {
     const itable = el("table", {},
       el("thead", {}, el("tr", {},
         el("th", {}, "Position"),
-        el("th", { class: "num tight" }, "Early"),
-        el("th", { class: "num tight" }, "Mid"),
-        el("th", { class: "num tight" }, "Late"),
+        el("th", { class: "num tight" }, "R1"),
+        el("th", { class: "num tight" }, "R2"),
+        el("th", { class: "num tight" }, "R3"),
         el("th", { class: "num tight gap-left" }, "Total"),
       )),
     );
@@ -1766,16 +1766,16 @@ function renderStats() {
           el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
           pos
         ),
-        cellFor(posPicks.filter(p => tierOfPickInRound(p.pickInRound) === "Early")),
-        cellFor(posPicks.filter(p => tierOfPickInRound(p.pickInRound) === "Mid")),
-        cellFor(posPicks.filter(p => tierOfPickInRound(p.pickInRound) === "Late")),
+        cellFor(posPicks.filter(p => p.round === 1)),
+        cellFor(posPicks.filter(p => p.round === 2)),
+        cellFor(posPicks.filter(p => p.round === 3)),
         cellForGap(posPicks),
       ));
     });
     itable.appendChild(itbody);
     insightCard.appendChild(itable);
     insightCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
-      "Hit % per cell, pick count in parens. Tiers span all 3 rounds (Early = .01–.04, Mid = .05–.08, Late = .09–.12)."
+      "Hit % per cell, pick count in parens. Each column is one round (R1/R2/R3); the last column is the drafter's all-round total at that position."
     ));
   }
   main.appendChild(insightCard);

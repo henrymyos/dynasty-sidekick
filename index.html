@@ -1739,6 +1739,14 @@ function renderStats() {
           if (ktc && ktc.rookieRank != null) {
             row.adpOverall = ktc.rookieRank;
             row.diff = p.pick_no - ktc.rookieRank;  // negative = reach
+            // Weight by the earlier of the two slots so early-pick moves
+            // count more: weight = (MAX+1 - earlier) / MAX. Slot 1 → ~1.0,
+            // slot 36 → ~0.03. Multiply raw diff to get weighted "impact".
+            const MAX_SLOT = 36;
+            const earlier = Math.max(1, Math.min(p.pick_no, ktc.rookieRank));
+            const weight = (MAX_SLOT + 1 - earlier) / MAX_SLOT;
+            row.weight = weight;
+            row.weightedDiff = row.diff * weight;
           }
           pickRows.push(row);
         });
@@ -1753,9 +1761,9 @@ function renderStats() {
       const byDrafter = {};
       rows.forEach(r => {
         const key = r.drafter;
-        (byDrafter[key] = byDrafter[key] || { drafter: key, picks: 0, sumDiff: 0, reaches: 0, steals: 0 });
+        (byDrafter[key] = byDrafter[key] || { drafter: key, picks: 0, sumWeighted: 0, reaches: 0, steals: 0 });
         byDrafter[key].picks += 1;
-        byDrafter[key].sumDiff += r.diff;
+        byDrafter[key].sumWeighted += (r.weightedDiff || 0);
         if (r.diff < 0) byDrafter[key].reaches += 1;
         else if (r.diff > 0) byDrafter[key].steals += 1;
       });
@@ -1770,7 +1778,7 @@ function renderStats() {
       );
       const adpBody = el("tbody", {});
       Object.values(byDrafter)
-        .map(s => ({ ...s, avgDiff: s.sumDiff / s.picks }))
+        .map(s => ({ ...s, avgDiff: s.sumWeighted / s.picks }))
         .sort((a, b) => b.avgDiff - a.avgDiff)
         .forEach(r => {
           adpBody.appendChild(el("tr", {},
@@ -1787,8 +1795,8 @@ function renderStats() {
       adpTable.appendChild(adpBody);
       adpCard.appendChild(adpTable);
 
-      const steals = rows.slice().sort((a, b) => b.diff - a.diff).slice(0, 8);
-      const reaches = rows.slice().sort((a, b) => a.diff - b.diff).slice(0, 8);
+      const steals = rows.slice().sort((a, b) => b.weightedDiff - a.weightedDiff).slice(0, 8);
+      const reaches = rows.slice().sort((a, b) => a.weightedDiff - b.weightedDiff).slice(0, 8);
       adpCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest steals (taken much later than ADP)"));
       adpCard.appendChild(renderAdpList(steals));
       adpCard.appendChild(el("h3", { style: "margin-top:20px" }, "Biggest reaches (taken much earlier than ADP)"));
@@ -1817,8 +1825,10 @@ function renderStats() {
     adpCard.appendChild(meta);
 
     adpCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
-      "ADP = KTC superflex rookie rank (their canonical site value, derived from SF dynasty value). " +
-      "Diff = actual pick − ADP. Negative = reached (taken earlier than KTC said); positive = steal."
+      "ADP = KTC superflex rookie rank. Diff = actual pick − ADP " +
+      "(negative = reach, positive = steal). " +
+      "Per-drafter Avg and the steals/reaches lists are weighted so earlier " +
+      "picks count more — a 4-spot miss at 1.02 outweighs a 10-spot miss at 3.04."
     ));
   }
   main.appendChild(adpCard);

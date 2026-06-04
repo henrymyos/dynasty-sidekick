@@ -2157,11 +2157,11 @@ function renderStats() {
     agCard.appendChild(renderGradeList(sortedBySurplus.slice(-8).reverse()));
 
     agCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
-      "Career PPG = total PPR points since the draft year ÷ NFL games played. " +
+      "Career PPG = total fantasy points since draft (using your league's scoring_settings) ÷ NFL games played. " +
       "Slot baseline = median career PPG of all picks ever taken at that slot — so a 1.04 has a much higher bar than a 3.04. " +
       "Surplus % = (player PPG − baseline) ÷ baseline. " +
       "Big Hit ≥ +50%, Hit ≥ +15%, Meh between ±15%, Miss < −15%, Big Miss < −50%. " +
-      "Picks with fewer than 4 NFL games (rookies, cuts, etc.) are skipped."
+      "Picks with fewer than 4 NFL games (rookies, cuts, severe injury) are skipped."
     ));
   }
   main.appendChild(agCard);
@@ -2450,7 +2450,9 @@ function ensurePlayerStatsLoaded() {
   if (!state.playerStats && !state.playerStatsLoading && !state.playerStatsError) loadPlayerStats();
 }
 
-// Compute a player's PPR points per game across all seasons since their draft.
+// Compute a player's league-scored fantasy points per game across all seasons
+// since their draft. Uses pts_league (computed server-side from your league's
+// scoring_settings) and falls back to pts_ppr if that's missing.
 function careerPPGSinceDraft(playerId, draftYear) {
   if (!state.playerStats || !state.playerStats.seasons) return null;
   let totalPts = 0;
@@ -2459,7 +2461,7 @@ function careerPPGSinceDraft(playerId, draftYear) {
     if (parseInt(season, 10) < draftYear) return;
     const s = players && players[playerId];
     if (!s) return;
-    totalPts += s.pts_ppr || 0;
+    totalPts += (s.pts_league != null ? s.pts_league : (s.pts_ppr || 0));
     totalGames += s.games || 0;
   });
   return { totalPts, totalGames, ppg: totalGames > 0 ? totalPts / totalGames : 0 };

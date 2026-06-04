@@ -851,6 +851,9 @@ let state = {
   ktcDynasty: null,        // current KTC dynasty values (shared across views)
   ktcDynastyLoading: false,
   ktcDynastyError: null,
+  playerStats: null,
+  playerStatsLoading: false,
+  playerStatsError: null,
 };
 
 function rgbToHex(bg) {
@@ -2032,42 +2035,44 @@ function renderStats() {
   main.appendChild(el("div", { class: "section-header" }, "Strategy Signals",
     el("span", { class: "section-sub" }, "Does beating consensus work?")));
 
-  // ----- Card: Auto-Graded Picks (KTC-based) -----
-  ensureKtcDynastyLoaded();
-  const agCard = el("div", { class: "card" }, el("h2", {}, "Auto-Graded Picks (KTC-Based)"));
+  // ----- Card: Auto-Graded Picks (career fantasy production vs slot baseline) -----
+  ensurePlayerStatsLoaded();
+  const agCard = el("div", { class: "card" }, el("h2", {}, "Auto-Graded Picks (Career PPG)"));
   if (!state.sleeper) {
     agCard.appendChild(el("div", { class: "empty" },
       state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
-  } else if (!state.ktcDynasty) {
+  } else if (!state.playerStats) {
     agCard.appendChild(el("div", { class: "empty" },
-      state.ktcDynastyError ? "KTC dynasty error: " + state.ktcDynastyError : "Loading KTC dynasty values…"));
+      state.playerStatsError ? "Stats error: " + state.playerStatsError : "Loading Sleeper season stats…"));
   } else {
-    const baselines = buildSlotBaselines() || {};
-    const dynPlayers = state.ktcDynasty.players || {};
+    const baselines = buildPpgSlotBaselines() || {};
 
-    // For each past rookie pick: look up current value, compute grade.
     const gradedPicks = [];
     state.sleeper.seasons.forEach(season => {
       const draft = rookieDraftFor(season);
       if (!draft) return;
+      const year = parseInt(season.season, 10);
       draft.picks.filter(p => p.round <= 3).forEach(p => {
         const sp = state.sleeper.players[p.player_id];
         if (!sp) return;
-        const entry = dynPlayers[ktcNormalizeName(sp.name)];
-        const currentValue = entry ? entry.value : null;
+        const career = careerPPGSinceDraft(p.player_id, year);
         const slot = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
         const baseline = baselines[slot];
-        const grade = autoGrade(currentValue, baseline);
+        // Skip 2026 picks (no career yet) and anyone with <4 NFL games.
+        const grade = (career && career.totalGames >= 4)
+          ? autoGrade(career.ppg, baseline)
+          : { grade: null, magnitude: 0, surplusPct: 0 };
         const owner = rosterToOwner(season, p.roster_id);
         gradedPicks.push({
-          year: parseInt(season.season, 10),
+          year,
           slot,
           overall: p.pick_no,
           drafter: canonicalOwnerName(owner ? userDisplay(owner) : "—"),
           playerName: sp.name,
           position: sp.position,
-          currentValue, baseline,
-          surplus: currentValue && baseline ? currentValue - baseline : null,
+          ppg: career ? career.ppg : 0,
+          games: career ? career.totalGames : 0,
+          baseline,
           ...grade,
         });
       });
@@ -2152,9 +2157,11 @@ function renderStats() {
     agCard.appendChild(renderGradeList(sortedBySurplus.slice(-8).reverse()));
 
     agCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
-      "Slot baseline = median current KTC superflex value of all picks ever taken at that slot. " +
-      "Surplus % = (player's current value − baseline) ÷ baseline. " +
-      "Big Hit ≥ +50%, Hit ≥ +15%, Meh between ±15%, Miss < −15%, Big Miss < −50%."
+      "Career PPG = total PPR points since the draft year ÷ NFL games played. " +
+      "Slot baseline = median career PPG of all picks ever taken at that slot — so a 1.04 has a much higher bar than a 3.04. " +
+      "Surplus % = (player PPG − baseline) ÷ baseline. " +
+      "Big Hit ≥ +50%, Hit ≥ +15%, Meh between ±15%, Miss < −15%, Big Miss < −50%. " +
+      "Picks with fewer than 4 NFL games (rookies, cuts, etc.) are skipped."
     ));
   }
   main.appendChild(agCard);
@@ -2421,21 +2428,57 @@ function ensureKtcDynastyLoaded() {
   if (!state.ktcDynasty && !state.ktcDynastyLoading && !state.ktcDynastyError) loadKtcDynasty();
 }
 
-// Build per-slot median current KTC value across all years' rookie drafts.
-function buildSlotBaselines() {
-  if (!state.sleeper || !state.ktcDynasty) return null;
-  const players = state.ktcDynasty.players || {};
+async function loadPlayerStats() {
+  if (state.playerStatsLoading || state.playerStats) return;
+  state.playerStatsLoading = true;
+  state.playerStatsError = null;
+  render();
+  try {
+    const res = await fetch("/api/player-stats", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.playerStats = data;
+  } catch (e) {
+    state.playerStatsError = e.message;
+  } finally {
+    state.playerStatsLoading = false;
+    render();
+  }
+}
+function ensurePlayerStatsLoaded() {
+  if (!state.playerStats && !state.playerStatsLoading && !state.playerStatsError) loadPlayerStats();
+}
+
+// Compute a player's PPR points per game across all seasons since their draft.
+function careerPPGSinceDraft(playerId, draftYear) {
+  if (!state.playerStats || !state.playerStats.seasons) return null;
+  let totalPts = 0;
+  let totalGames = 0;
+  Object.entries(state.playerStats.seasons).forEach(([season, players]) => {
+    if (parseInt(season, 10) < draftYear) return;
+    const s = players && players[playerId];
+    if (!s) return;
+    totalPts += s.pts_ppr || 0;
+    totalGames += s.games || 0;
+  });
+  return { totalPts, totalGames, ppg: totalGames > 0 ? totalPts / totalGames : 0 };
+}
+
+// Build per-slot median career PPG of every pick taken at that slot.
+// Career PPG = total PPR points since the player's draft year ÷ games played.
+function buildPpgSlotBaselines() {
+  if (!state.sleeper || !state.playerStats) return null;
   const slotValues = {};
   state.sleeper.seasons.forEach(season => {
     const draft = rookieDraftFor(season);
     if (!draft) return;
+    const year = parseInt(season.season, 10);
     draft.picks.filter(p => p.round <= 3).forEach(p => {
-      const sp = state.sleeper.players[p.player_id];
-      if (!sp) return;
-      const entry = players[ktcNormalizeName(sp.name)];
-      if (!entry || !entry.value) return;
+      const career = careerPPGSinceDraft(p.player_id, year);
+      if (!career || career.totalGames < 4) return;   // skip near-zero samples
       const slot = `${p.round}.${String(p.draft_slot).padStart(2, "0")}`;
-      (slotValues[slot] = slotValues[slot] || []).push(entry.value);
+      (slotValues[slot] = slotValues[slot] || []).push(career.ppg);
     });
   });
   const baselines = {};

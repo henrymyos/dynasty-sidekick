@@ -2368,16 +2368,49 @@ function resolvePickToPlayer(dp, allSeasons, players) {
 
 function renderTradePickLine(dp, allSeasons, players) {
   const line = el("div", { class: "trade-line" });
-  const label = `${dp.season} Round ${dp.round} pick`;
-  const resolved = resolvePickToPlayer(dp, allSeasons, players);
+  const seasonOfPick = allSeasons.find(s => s.season === dp.season);
+
+  // Try to find the actual draft slot if that season's draft has happened.
+  let slotLabel = `Round ${dp.round}`;
+  let resolved = null;
+  if (seasonOfPick) {
+    const draft = seasonOfPick.drafts
+      .filter(d => d.status === "complete" && (d.rounds || 0) >= dp.round && d.picks && d.picks.length)
+      .slice()
+      .sort((a, b) => (a.created || 0) - (b.created || 0))[0];
+    if (draft) {
+      const slotEntry = Object.entries(draft.slot_to_roster_id || {})
+        .find(([, rid]) => rid === dp.roster_id);
+      if (slotEntry) {
+        const slotNum = parseInt(slotEntry[0], 10);
+        slotLabel = `${dp.round}.${String(slotNum).padStart(2, "0")}`;
+        const pick = draft.picks.find(p => p.round === dp.round && p.draft_slot === slotNum);
+        if (pick) {
+          const player = players[pick.player_id];
+          if (player) resolved = { pick, player };
+        }
+      }
+    }
+  }
+
+  // Look up the original slot owner. Use the pick's season league if it
+  // exists; otherwise fall back to the current league (roster_ids are stable
+  // across seasons in dynasty leagues).
+  const currentSeason = allSeasons[allSeasons.length - 1];
+  let origin = seasonOfPick ? rosterToOwner(seasonOfPick, dp.roster_id) : null;
+  if (!origin && currentSeason) origin = rosterToOwner(currentSeason, dp.roster_id);
+  const originName = origin ? canonicalOwnerName(userDisplay(origin)) : null;
+
+  const label = `${dp.season} ${slotLabel} pick`;
+  line.appendChild(el("span", { class: "trade-player" }, label));
+  if (originName) {
+    line.appendChild(el("span", { class: "trade-resolved" }, "· " + originName));
+  }
   if (resolved && resolved.player) {
-    line.appendChild(el("span", { class: "trade-player" }, label));
     line.appendChild(el("span", { class: "trade-resolved" }, "→ " + resolved.player.name));
     if (resolved.player.position) {
       line.appendChild(el("span", { class: "pos-chip " + positionClass(resolved.player.position) }, resolved.player.position));
     }
-  } else {
-    line.appendChild(el("span", { class: "trade-player" }, label));
   }
   return line;
 }

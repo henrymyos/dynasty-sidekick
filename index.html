@@ -842,6 +842,9 @@ let state = {
   flockLive: null,             // shared flock-live response for non-draft views
   flockLiveLoading: false,
   flockLiveError: null,
+  ktcDynasty: null,            // current KTC superflex dynasty values (shared)
+  ktcDynastyLoading: false,
+  ktcDynastyError: null,
   leaderboardRound: null,
   statsRound: null,
   statsInsightDrafter: null,
@@ -1334,11 +1337,13 @@ function tierOfPickInRound(pir) {
 // Compute KTC superflex value totals for every roster in the current league.
 function computeManagerRankings() {
   if (!state.sleeper || !state.sleeper.seasons.length) return null;
-  if (!state.tradeHistory || !state.tradeHistory.snapshots || !state.tradeHistory.snapshots.length) return null;
+  if (!state.ktcDynasty || !state.ktcDynasty.players) return null;
   const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
-  const latestSnap = state.tradeHistory.snapshots[state.tradeHistory.snapshots.length - 1];
-  const ktcPlayers = latestSnap.players || {};
-  const ktcPicks = latestSnap.picks || {};
+  // Current KTC dynasty values (re-key { normName: { value } } to { normName: value }).
+  const ktcRaw = state.ktcDynasty.players || {};
+  const ktcPlayers = {};
+  Object.entries(ktcRaw).forEach(([n, v]) => { ktcPlayers[n] = v && v.value ? v.value : 0; });
+  const ktcPicks = state.ktcDynasty.picks || {};
   const tradedPicks = state.sleeper.traded_picks || [];
 
   const currentRookieDraft = (latestSeason.drafts || []).find(
@@ -1451,7 +1456,7 @@ function renderRankings() {
   const main = document.getElementById("main");
   main.innerHTML = "";
   ensureSleeperLoaded();
-  ensureTradeHistoryLoaded();
+  ensureKtcDynastyLoaded();
 
   const controls = el("div", { class: "controls" });
   const opts = [
@@ -1472,9 +1477,9 @@ function renderRankings() {
     main.appendChild(card);
     return;
   }
-  if (!state.tradeHistory) {
+  if (!state.ktcDynasty) {
     card.appendChild(el("div", { class: "empty" },
-      state.tradeHistoryError ? "KTC history error: " + state.tradeHistoryError : "Loading KTC values…"));
+      state.ktcDynastyError ? "KTC error: " + state.ktcDynastyError : "Loading current KTC values…"));
     main.appendChild(card);
     return;
   }
@@ -1552,7 +1557,7 @@ function renderRosters() {
   const main = document.getElementById("main");
   main.innerHTML = "";
   ensureSleeperLoaded();
-  ensureTradeHistoryLoaded();
+  ensureKtcDynastyLoaded();
   ensureFlockLoaded();
 
   if (!state.sleeper) {
@@ -1560,15 +1565,19 @@ function renderRosters() {
       state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
     return;
   }
-  if (!state.tradeHistory || !state.tradeHistory.snapshots || !state.tradeHistory.snapshots.length) {
+  if (!state.ktcDynasty) {
     main.appendChild(el("div", { class: "empty" },
-      state.tradeHistoryError ? "KTC error: " + state.tradeHistoryError : "Loading KTC values…"));
+      state.ktcDynastyError ? "KTC error: " + state.ktcDynastyError : "Loading current KTC values…"));
     return;
   }
 
   const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
-  const latestSnap = state.tradeHistory.snapshots[state.tradeHistory.snapshots.length - 1];
-  const ktcPlayers = latestSnap.players || {};
+  // Current KTC dynasty values: { normName: { value, position, ... } }.
+  const ktcRaw = state.ktcDynasty.players || {};
+  const ktcPlayers = {};
+  Object.entries(ktcRaw).forEach(([norm, entry]) => {
+    ktcPlayers[norm] = entry && entry.value ? entry.value : 0;
+  });
   const flockByName = {};
   ((state.flockLive && state.flockLive.allPlayers) || []).forEach(p => {
     flockByName[p.normName] = p.flockValue;
@@ -2569,6 +2578,28 @@ async function loadFlockLive() {
 }
 function ensureFlockLoaded() {
   if (!state.flockLive && !state.flockLiveLoading && !state.flockLiveError) loadFlockLive();
+}
+
+async function loadKtcDynasty() {
+  if (state.ktcDynastyLoading || state.ktcDynasty) return;
+  state.ktcDynastyLoading = true;
+  state.ktcDynastyError = null;
+  render();
+  try {
+    const res = await fetch("/api/ktc-dynasty", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.ktcDynasty = data;
+  } catch (e) {
+    state.ktcDynastyError = e.message;
+  } finally {
+    state.ktcDynastyLoading = false;
+    render();
+  }
+}
+function ensureKtcDynastyLoaded() {
+  if (!state.ktcDynasty && !state.ktcDynastyLoading && !state.ktcDynastyError) loadKtcDynasty();
 }
 
 

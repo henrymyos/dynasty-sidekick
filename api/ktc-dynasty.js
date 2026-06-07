@@ -64,19 +64,32 @@ export default async function handler(req, res) {
     }
     const players = JSON.parse(arrJson);
     const byName = {};
+    const picks = {};
+    // Pick names look like "2026 Early 1st" / "2026 Mid 2nd" etc.
+    function parsePickName(name) {
+      const m = (name || "").trim().match(/^(\d{4})\s+(Early|Mid|Late)\s+(\d+)(st|nd|rd|th)$/i);
+      if (!m) return null;
+      return { season: m[1], tier: m[2].toLowerCase(), round: parseInt(m[3], 10) };
+    }
     for (const p of players) {
-      if (!p.playerName || p.position === "RDP" || p.position === "PICK") continue;
+      if (!p.playerName) continue;
       const sf = p.superflexValues || {};
+      const val = sf.value || 0;
+      if (p.position === "RDP" || p.position === "PICK") {
+        const parsed = parsePickName(p.playerName);
+        if (parsed) picks[`${parsed.season}|${parsed.tier}|${parsed.round}`] = val;
+        continue;
+      }
       byName[normalizeName(p.playerName)] = {
         name: p.playerName,
         position: p.position,
         team: p.team || null,
-        value: sf.value || 0,
+        value: val,
         rank: sf.rank,
         positionRank: sf.positionalRank,
       };
     }
-    cache = { players: byName, updated: Date.now() };
+    cache = { players: byName, picks, updated: Date.now() };
     cacheAt = Date.now();
     res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
     res.json(cache);

@@ -149,7 +149,17 @@ export default async function handler(req, res) {
     }));
 
     res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=86400");
-    res.json({ seasons: slim, players: referenced });
+    // All currently-pending traded picks for the current league (covers every
+    // future season). Used to value each roster's pick assets.
+    const tradedPicks = await get(`/league/${CURRENT_LEAGUE_ID}/traded_picks`).catch(() => []);
+    const slimTradedPicks = tradedPicks.map(t => ({
+      season: t.season,
+      round: t.round,
+      roster_id: t.roster_id,
+      owner_id: t.owner_id,
+      previous_owner_id: t.previous_owner_id,
+    }));
+    res.json({ seasons: slim, players: referenced, traded_picks: slimTradedPicks });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
   }

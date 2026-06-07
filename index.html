@@ -839,6 +839,9 @@ let state = {
   leaderboardSort: { col: "hitPct", dir: "desc" },
   rankingsSort: "composite",  // "composite" | "value" | "contender"
   rosterTeam: null,            // selected user_id on the Rosters tab
+  flockLive: null,             // shared flock-live response for non-draft views
+  flockLiveLoading: false,
+  flockLiveError: null,
   leaderboardRound: null,
   statsRound: null,
   statsInsightDrafter: null,
@@ -1534,14 +1537,14 @@ function renderRankings() {
   main.appendChild(card);
 }
 
-// Asset tier from KTC superflex value alone. Tuned to land most starter-grade
-// players in Cornerstone / Tradeable and most fringe pieces in Wait & See /
+// Asset tier from the blended KTC + Flock value. Tuned to land most starter-
+// grade players in Cornerstone / Tradeable and fringe pieces in Wait & See /
 // Droppable. Same labels Sleeper Portfolio uses.
-function classifyAsset(ktcValue) {
-  if (ktcValue == null) ktcValue = 0;
-  if (ktcValue >= 7500) return { label: "Cornerstone", chip: "auto-big-hit" };
-  if (ktcValue >= 3500) return { label: "Tradeable", chip: "auto-meh" };
-  if (ktcValue >= 1500) return { label: "Wait & See", chip: "auto-hit" };
+function classifyAsset(blended) {
+  if (blended == null) blended = 0;
+  if (blended >= 7500) return { label: "Cornerstone", chip: "auto-big-hit" };
+  if (blended >= 3500) return { label: "Tradeable", chip: "auto-meh" };
+  if (blended >= 1500) return { label: "Wait & See", chip: "auto-hit" };
   return { label: "Droppable", chip: "auto-miss" };
 }
 
@@ -1550,6 +1553,7 @@ function renderRosters() {
   main.innerHTML = "";
   ensureSleeperLoaded();
   ensureTradeHistoryLoaded();
+  ensureFlockLoaded();
 
   if (!state.sleeper) {
     main.appendChild(el("div", { class: "empty" },
@@ -1565,6 +1569,11 @@ function renderRosters() {
   const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
   const latestSnap = state.tradeHistory.snapshots[state.tradeHistory.snapshots.length - 1];
   const ktcPlayers = latestSnap.players || {};
+  const flockByName = {};
+  ((state.flockLive && state.flockLive.allPlayers) || []).forEach(p => {
+    flockByName[p.normName] = p.flockValue;
+  });
+  const flockAvailable = Object.keys(flockByName).length > 0;
 
   // Team selector
   const users = latestSeason.users.slice().sort((a, b) =>
@@ -1612,12 +1621,21 @@ function renderRosters() {
     return valueByPosByRoster[rosterId][position] > leagueAvgByPos[position] * 1.10;
   }
 
-  // Helper: enrich a player_id with KTC value, name, position, tier.
+  // Helper: enrich a player_id with KTC + Flock values and a blended tier.
   function enrich(pid) {
     const p = state.sleeper.players[pid];
     if (!p) return null;
-    const v = ktcPlayers[ktcNormalizeName(p.name)] || 0;
-    return { pid, name: p.name, position: p.position, value: v, tier: classifyAsset(v) };
+    const norm = ktcNormalizeName(p.name);
+    const ktc = ktcPlayers[norm] || 0;
+    const flock = flockByName[norm] || 0;
+    let blended;
+    if (ktc && flock) blended = (ktc + flock) / 2;
+    else blended = ktc || flock;
+    return {
+      pid, name: p.name, position: p.position,
+      ktc, flock, value: blended,
+      tier: classifyAsset(blended),
+    };
   }
 
   const myAssets = (selectedRoster.players || []).map(enrich).filter(Boolean);
@@ -1643,7 +1661,12 @@ function renderRosters() {
           a.position ? el("span", { class: "pos-chip " + positionClass(a.position), style: "margin-left:8px" }, a.position) : null,
           el("span", { class: "auto-grade-chip " + a.tier.chip, style: "margin-left:8px" }, a.tier.label),
         ),
-        el("div", { class: "pick-history-by" }, a.value ? a.value.toLocaleString() : "—"),
+        el("div", { class: "pick-history-by" }, (() => {
+          const bits = [];
+          if (a.ktc) bits.push("KTC " + a.ktc.toLocaleString());
+          if (a.flock) bits.push("Flock " + a.flock.toLocaleString());
+          return bits.length ? bits.join("  ·  ") : "—";
+        })()),
       );
       rosterCard.appendChild(row);
     });
@@ -1672,16 +1695,22 @@ function renderRosters() {
         if (mine.position === theirs.position) return;
         if (!isWeakAt(selectedRoster.roster_id, theirs.position)) return;
         if (!isWeakAt(other.roster_id, mine.position)) return;
-        const max = Math.max(mine.value, theirs.value);
-        if (!max) return;
-        const diff = Math.abs(mine.value - theirs.value) / max;
-        if (diff > 0.15) return;
+        // Verify on every calculator we have data for. KTC always, Flock when
+        // both sides have a Flock entry. Worst (largest) diff is the limit.
+        const checks = [];
+        if (mine.ktc && theirs.ktc) checks.push(Math.abs(mine.ktc - theirs.ktc) / Math.max(mine.ktc, theirs.ktc));
+        if (mine.flock && theirs.flock) checks.push(Math.abs(mine.flock - theirs.flock) / Math.max(mine.flock, theirs.flock));
+        if (!checks.length) return;
+        const worstDiff = Math.max(...checks);
+        if (worstDiff > 0.15) return;
         trades.push({
           partnerName: otherName,
           send: mine,
           recv: theirs,
-          diffPct: diff,
-          fairness: 1 - diff,
+          diffPct: worstDiff,
+          fairness: 1 - worstDiff,
+          ktcChecked: mine.ktc && theirs.ktc,
+          flockChecked: mine.flock && theirs.flock,
         });
       });
     });
@@ -1709,17 +1738,23 @@ function renderRosters() {
       const cols = el("div", { class: "trade-cols" });
       const sendCol = el("div", { class: "trade-col" },
         el("div", { class: "trade-col-label" }, "You send"));
+      function valueLabel(a) {
+        const bits = [];
+        if (a.ktc) bits.push("KTC " + a.ktc.toLocaleString());
+        if (a.flock) bits.push("Flock " + a.flock.toLocaleString());
+        return bits.join("  ·  ");
+      }
       sendCol.appendChild(el("div", { class: "trade-line" },
         el("span", { class: "trade-player" }, t.send.name),
         el("span", { class: "pos-chip " + positionClass(t.send.position) }, t.send.position),
-        el("span", { class: "trade-where" }, t.send.value.toLocaleString()),
+        el("span", { class: "trade-where" }, valueLabel(t.send)),
       ));
       const recvCol = el("div", { class: "trade-col" },
         el("div", { class: "trade-col-label" }, "You get"));
       recvCol.appendChild(el("div", { class: "trade-line" },
         el("span", { class: "trade-player" }, t.recv.name),
         el("span", { class: "pos-chip " + positionClass(t.recv.position) }, t.recv.position),
-        el("span", { class: "trade-where" }, t.recv.value.toLocaleString()),
+        el("span", { class: "trade-where" }, valueLabel(t.recv)),
       ));
       cols.appendChild(sendCol);
       cols.appendChild(recvCol);
@@ -1730,9 +1765,13 @@ function renderRosters() {
     });
   }
   tradeCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
-    "Values are KTC superflex dynasty values from the latest history snapshot. " +
-    "Trades shown are 1-for-1 swaps within 15% total value where both sides fill a positional weakness (each side is below 85% of the league average at the position they receive). " +
-    "Showing up to 2 ideas per partner, top 8 overall by fairness."
+    "Player values come from both KTC superflex dynasty (latest history snapshot) and FlockFantasy expert average (scaled to a 0-10000 range from #1 = 10000 to #" +
+    ((state.flockLive && state.flockLive.allPlayers && state.flockLive.allPlayers.length) || "—") +
+    " = 0). " +
+    "A swap qualifies only when every calculator with data on both sides agrees the value gap is < 15%. " +
+    "Both sides must also be below 85% of the league average at the position they receive (real positional fit). " +
+    "Up to 2 ideas per partner, top 8 overall by fairness. " +
+    (flockAvailable ? "" : "Flock data is still loading; KTC-only matching is shown until it arrives.")
   ));
   main.appendChild(tradeCard);
 }
@@ -2508,6 +2547,28 @@ async function loadTradeHistory() {
 }
 function ensureTradeHistoryLoaded() {
   if (!state.tradeHistory && !state.tradeHistoryLoading && !state.tradeHistoryError) loadTradeHistory();
+}
+
+async function loadFlockLive() {
+  if (state.flockLiveLoading || state.flockLive) return;
+  state.flockLiveLoading = true;
+  state.flockLiveError = null;
+  render();
+  try {
+    const res = await fetch("/api/flock-live", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.flockLive = data;
+  } catch (e) {
+    state.flockLiveError = e.message;
+  } finally {
+    state.flockLiveLoading = false;
+    render();
+  }
+}
+function ensureFlockLoaded() {
+  if (!state.flockLive && !state.flockLiveLoading && !state.flockLiveError) loadFlockLive();
 }
 
 

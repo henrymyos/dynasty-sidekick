@@ -114,22 +114,34 @@ export default async function handler(req, res) {
     if (body.statusCode && body.statusCode >= 400) {
       throw new Error("Flock body error: " + JSON.stringify(body).slice(0, 200));
     }
-    const rookies = (body.data || [])
-      .filter(p => p.isRookie && p.position && p.averageRank != null)
+    // Every actual player in the dataset (rookies + vets), sorted by Flock's
+    // expert-avg rank ascending. Pick assets (draft picks like "2026 Mid 1st")
+    // are excluded so this is comparable to a KTC dynasty player feed.
+    const allPlayers = (body.data || [])
+      .filter(p => p.position && !p.isDraftPick && p.averageRank != null)
       .map(p => ({
         name: p.playerName,
         normName: normalizeName(p.playerName),
         position: p.position,
         team: p.team || null,
         averageRank: p.averageRank,
-        overallAverageRank: p.overallAverageRank,
-        rookie: true,
+        isRookie: !!p.isRookie,
       }))
       .sort((a, b) => a.averageRank - b.averageRank);
+    // Implied 0–10000 value scale so we can blend with KTC's value space:
+    // #1 → 10000, last → 0, linear in between.
+    const total = allPlayers.length;
+    allPlayers.forEach((p, i) => {
+      p.dynastyRank = i + 1;
+      p.flockValue = total > 1 ? Math.round(10000 * (1 - i / (total - 1))) : 0;
+    });
+
+    const rookies = allPlayers.filter(p => p.isRookie);
     rookies.forEach((p, i) => { p.rookieRank = i + 1; });
 
     const payload = {
       players: rookies,
+      allPlayers,
       subscribed: !!body.subscribed,
       year: body.year,
       updated: Date.now(),

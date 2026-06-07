@@ -1850,6 +1850,121 @@ function renderStats() {
   // ===== Stretch-win cards (need Sleeper / KTC data) =====
   ensureSleeperLoaded();
   ensureKtcLoaded();
+  ensureTradeHistoryLoaded();
+
+  // ----- Card: Manager Power Rankings (Value + Contender) -----
+  main.appendChild(el("div", { class: "section-header" }, "Power Rankings",
+    el("span", { class: "section-sub" }, "Each manager's current value and contender strength")));
+
+  const prCard = el("div", { class: "card" }, el("h2", {}, "Manager Power Rankings"));
+  if (!state.sleeper || !state.sleeper.seasons.length) {
+    prCard.appendChild(el("div", { class: "empty" }, "Loading Sleeper data…"));
+  } else if (!state.tradeHistory || !state.tradeHistory.snapshots || !state.tradeHistory.snapshots.length) {
+    prCard.appendChild(el("div", { class: "empty" }, "Loading KTC values…"));
+  } else {
+    const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
+    const ktcLatest = state.tradeHistory.snapshots[state.tradeHistory.snapshots.length - 1].players || {};
+
+    // 1 QB, 2 RB, 3 WR, 1 TE, 1 FLEX (RB/WR/TE), 1 SUPER_FLEX (QB/RB/WR/TE).
+    const STARTING_SLOTS = [
+      { pos: ["QB"], n: 1 },
+      { pos: ["RB"], n: 2 },
+      { pos: ["WR"], n: 3 },
+      { pos: ["TE"], n: 1 },
+      { pos: ["RB", "WR", "TE"], n: 1 },
+      { pos: ["QB", "RB", "WR", "TE"], n: 1 },
+    ];
+
+    function rosterMetrics(roster) {
+      const byPos = { QB: [], RB: [], WR: [], TE: [] };
+      let total = 0;
+      (roster.players || []).forEach(pid => {
+        const p = state.sleeper.players[pid];
+        if (!p) return;
+        const v = ktcLatest[ktcNormalizeName(p.name)] || 0;
+        total += v;
+        if (byPos[p.position]) byPos[p.position].push({ pid, value: v });
+      });
+      Object.values(byPos).forEach(arr => arr.sort((a, b) => b.value - a.value));
+      let optimal = 0;
+      const used = new Set();
+      STARTING_SLOTS.forEach(slot => {
+        const pool = slot.pos.flatMap(pos => byPos[pos].filter(x => !used.has(x.pid)));
+        pool.sort((a, b) => b.value - a.value);
+        for (let i = 0; i < slot.n && i < pool.length; i++) {
+          optimal += pool[i].value;
+          used.add(pool[i].pid);
+        }
+      });
+      return { totalValue: total, optimalValue: optimal };
+    }
+
+    const rows = latestSeason.rosters.map(r => {
+      const user = latestSeason.users.find(u => u.user_id === r.owner_id);
+      const name = user ? canonicalOwnerName(userDisplay(user)) : "—";
+      return { roster_id: r.roster_id, name, ...rosterMetrics(r) };
+    });
+    const N = rows.length;
+    const valRanked = rows.slice().sort((a, b) => b.totalValue - a.totalValue);
+    const conRanked = rows.slice().sort((a, b) => b.optimalValue - a.optimalValue);
+    const valueRank = {}, contenderRank = {};
+    valRanked.forEach((r, i) => { valueRank[r.roster_id] = i + 1; });
+    conRanked.forEach((r, i) => { contenderRank[r.roster_id] = i + 1; });
+
+    // Sleeper Portfolio's classification: composite = 0.6 × value-pctile + 0.4 ×
+    // contender-pctile. Lower composite = stronger. Bands match their three tiers.
+    function classify(vRank, cRank) {
+      if (N < 2) return { label: "Middler", pill: "pill-avg" };
+      const vP = (vRank - 1) / (N - 1);
+      const cP = (cRank - 1) / (N - 1);
+      const score = 0.6 * vP + 0.4 * cP;
+      if (score < 0.4) return { label: "Contender", pill: "pill-strong" };
+      if (score < 0.7) return { label: "Middler", pill: "pill-avg" };
+      return { label: "Reloader", pill: "pill-weak" };
+    }
+
+    const prTable = el("table", {},
+      el("thead", {}, el("tr", {},
+        el("th", {}, "Manager"),
+        el("th", { class: "num" }, "Value"),
+        el("th", { class: "num" }, "Contender"),
+        el("th", { class: "num tight gap-left" }, "Total Value"),
+        el("th", { class: "num tight" }, "Starter Value"),
+        el("th", {}, "Status"),
+      )),
+    );
+    const prBody = el("tbody", {});
+    rows
+      .map(r => {
+        const v = valueRank[r.roster_id];
+        const c = contenderRank[r.roster_id];
+        const composite = N > 1 ? 0.6 * (v - 1) / (N - 1) + 0.4 * (c - 1) / (N - 1) : 0.5;
+        return { ...r, vRank: v, cRank: c, composite };
+      })
+      .sort((a, b) => a.composite - b.composite)
+      .forEach(r => {
+        const cls = classify(r.vRank, r.cRank);
+        prBody.appendChild(el("tr", {},
+          el("td", {}, r.name),
+          el("td", { class: "num" }, "#" + r.vRank),
+          el("td", { class: "num" }, "#" + r.cRank),
+          el("td", { class: "num tight gap-left" }, Math.round(r.totalValue).toLocaleString()),
+          el("td", { class: "num tight" }, Math.round(r.optimalValue).toLocaleString()),
+          el("td", {}, el("span", { class: "pill " + cls.pill }, cls.label)),
+        ));
+      });
+    prTable.appendChild(prBody);
+    prCard.appendChild(prTable);
+    prCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
+      "Total Value = sum of KTC superflex value for every player on the roster. " +
+      "Starter Value = KTC value of the optimal starting lineup (1 QB, 2 RB, 3 WR, 1 TE, 1 FLEX, 1 SF). " +
+      "Status follows Sleeper Portfolio's formula: composite = 0.6 × value-percentile + 0.4 × contender-percentile, " +
+      "where 0 = best in league and 1 = worst. " +
+      "Composite < 0.4 → Contender (win now), 0.4–0.7 → Middler, ≥ 0.7 → Reloader (build for later). " +
+      "Pick values are not included yet."
+    ));
+  }
+  main.appendChild(prCard);
 
   main.appendChild(el("div", { class: "section-header" }, "Strategy Signals",
     el("span", { class: "section-sub" }, "Does beating consensus work?")));

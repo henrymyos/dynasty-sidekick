@@ -1799,7 +1799,7 @@ function renderRosters() {
 
   function movablePool(assets) {
     return assets.filter(a =>
-      (a.tier.label === "Tradeable" || a.tier.label === "Wait & See") && a.value >= 1000
+      a.tier.label !== "Droppable" && a.value >= 800
     );
   }
   function rosterImpact(rosterId, gives, gets, needSet) {
@@ -1893,11 +1893,16 @@ function renderRosters() {
         const worstDiff = Math.max(ktcDiff, flockDiff != null ? flockDiff : 0);
         const fairness = 1 - worstDiff;
         const fitScore = (myFinal.fits.length + theirFinal.fits.length);
-        // Penalize combo size hard so simpler swaps win on ties. A 3-for-3
-        // needs to be substantially fairer or fill more gaps than a 1-for-1
-        // to outrank it.
         const sizePenalty = (gives.length + gets.length - 2) * 0.06;
-        const score = fairness * 0.7 + (fitScore / 4) * 0.30 - sizePenalty;
+        // Mix bonus: reward asymmetric player ↔ pick swaps. If one side is
+        // mostly players and the other mostly picks, that's exactly the kind
+        // of trade contenders and reloaders make. 0 when both sides are
+        // homogeneous mixes, up to ~0.10 when fully asymmetric.
+        function pickFraction(side) {
+          return side.filter(a => a.kind === "pick").length / side.length;
+        }
+        const mixBonus = Math.abs(pickFraction(gives) - pickFraction(gets)) * 0.10;
+        const score = fairness * 0.65 + (fitScore / 4) * 0.25 + mixBonus - sizePenalty;
         allTrades.push({
           partnerName: otherName,
           partnerRosterId: other.roster_id,
@@ -1914,8 +1919,20 @@ function renderRosters() {
   allTrades.sort((a, b) => b.score - a.score);
   const seenPartner = {};
   const seenSize = {};
+  const seenMix = {};
   const seenKeys = new Set();
   const topTrades = [];
+  function mixTag(t) {
+    const givesHasPicks = t.gives.some(a => a.kind === "pick");
+    const givesHasPlayers = t.gives.some(a => a.kind === "player");
+    const getsHasPicks = t.gets.some(a => a.kind === "pick");
+    const getsHasPlayers = t.gets.some(a => a.kind === "player");
+    if ((givesHasPlayers && !givesHasPicks && getsHasPicks && !getsHasPlayers)
+        || (getsHasPlayers && !getsHasPicks && givesHasPicks && !givesHasPlayers)) return "playerPick";
+    if (!givesHasPicks && !getsHasPicks) return "playerOnly";
+    if (!givesHasPlayers && !getsHasPlayers) return "pickOnly";
+    return "mixed";
+  }
   for (const t of allTrades) {
     if (topTrades.length >= 10) break;
     const key = t.partnerRosterId + "|" + t.gives.map(g => g.id).sort().join(",") + "|" + t.gets.map(g => g.id).sort().join(",");
@@ -1925,10 +1942,15 @@ function renderRosters() {
     if (c >= 2) continue;
     const sizeKey = t.gives.length + "x" + t.gets.length;
     const sc = seenSize[sizeKey] || 0;
-    // Cap per combo-size so 3-for-3 trades can't dominate the list.
     if (sc >= 3) continue;
+    const mix = mixTag(t);
+    const mc = seenMix[mix] || 0;
+    // Cap player-only at 4 and pure-pick at 2 so player↔pick trades have room.
+    if (mix === "playerOnly" && mc >= 4) continue;
+    if (mix === "pickOnly" && mc >= 2) continue;
     seenPartner[t.partnerName] = c + 1;
     seenSize[sizeKey] = sc + 1;
+    seenMix[mix] = mc + 1;
     topTrades.push(t);
   }
 
@@ -1978,15 +2000,16 @@ function renderRosters() {
     });
   }
   tradeCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
-    "Algorithm: exhaustive search across all 1-for-1 through 3-for-3 swaps between you and every other manager, " +
-    "with future draft picks included in the movable pool. " +
+    "Algorithm: exhaustive search across all 1-for-1 through 3-for-3 swaps between you and every other manager. " +
+    "Movable pool includes every Cornerstone, Tradeable, and Wait & See asset on either roster, plus every future draft pick currently owned. " +
     "Blended value = 0.7 × Flock expert-avg + 0.3 × KTC (Flock-only or KTC-only if one source is missing). " +
     "Asset tiers use a position-aware age curve (QB cliff 33, WR 28, TE 30, RB 26 — picks classified by value alone). " +
     "A swap qualifies only when (a) every calculator with data on both sides agrees the value gap is < 12%, " +
     "(b) the giver is not parting with a position they're already weak at, and " +
     "(c) at least one need-set position improves on each side. " +
     "Need set = positions below 85% of league average value; if a roster has none, the two weakest starter positions are used as the need set instead. " +
-    "Top 10 by composite score (70% fairness + 30% mutual fit count, with a size penalty so simpler swaps win ties); max 2 per partner and max 3 per combo size."
+    "Top 10 by composite score (65% fairness + 25% mutual fit count + up to 10% bonus for player↔pick asymmetry, minus a size penalty); " +
+    "max 2 per partner, max 3 per combo size, and capped at 4 player-only and 2 pick-only trades so player↔pick deals always have room."
   ));
   main.appendChild(tradeCard);
 }

@@ -91,6 +91,8 @@ export default async function handler(req, res) {
         name: `${p.first_name || ""} ${p.last_name || ""}`.trim() || id,
         position: p.position || null,
         team: p.team || null,
+        age: typeof p.age === "number" ? p.age : null,
+        years_exp: typeof p.years_exp === "number" ? p.years_exp : null,
       };
     });
 

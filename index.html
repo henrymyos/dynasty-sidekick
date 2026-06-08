@@ -1542,15 +1542,38 @@ function renderRankings() {
   main.appendChild(card);
 }
 
-// Asset tier from the blended KTC + Flock value. Tuned to land most starter-
-// grade players in Cornerstone / Tradeable and fringe pieces in Wait & See /
-// Droppable. Same labels Sleeper Portfolio uses.
-function classifyAsset(blended) {
+// Age-aware classification. Value still sets Cornerstone vs Droppable, but
+// the "Tradeable" / "Wait & See" split inside the middle bands flips based on
+// where the player sits on the position-specific aging curve: rising players
+// (under prime) are Wait & See, declining ones (past prime) are Tradeable.
+//
+// Cliff = age at which the position's dynasty value starts to decline meaningfully.
+const POSITION_AGE_CURVE = {
+  QB: { rising: 26, cliff: 33 },   // QBs hold value the longest
+  WR: { rising: 24, cliff: 28 },
+  TE: { rising: 25, cliff: 30 },
+  RB: { rising: 23, cliff: 26 },   // RBs age fastest
+};
+
+function classifyAsset(blended, position, age) {
   if (blended == null) blended = 0;
+  // Picks have no age — classify by value only.
+  if (position === "PICK") {
+    if (blended >= 5000) return { label: "Cornerstone", chip: "auto-big-hit" };
+    if (blended >= 2500) return { label: "Tradeable", chip: "auto-meh" };
+    if (blended >= 1000) return { label: "Wait & See", chip: "auto-hit" };
+    return { label: "Droppable", chip: "auto-miss" };
+  }
   if (blended >= 7500) return { label: "Cornerstone", chip: "auto-big-hit" };
-  if (blended >= 3500) return { label: "Tradeable", chip: "auto-meh" };
-  if (blended >= 1500) return { label: "Wait & See", chip: "auto-hit" };
-  return { label: "Droppable", chip: "auto-miss" };
+  if (blended < 1500) return { label: "Droppable", chip: "auto-miss" };
+  // Middle bands split by age vs position curve.
+  const curve = POSITION_AGE_CURVE[position] || POSITION_AGE_CURVE.WR;
+  const cliffAge = age != null && age >= curve.cliff;
+  const risingAge = age != null && age <= curve.rising;
+  if (cliffAge) return { label: "Tradeable", chip: "auto-meh" };
+  if (risingAge) return { label: "Wait & See", chip: "auto-hit" };
+  // In-prime middle: default to Tradeable since they're at peak value to sell.
+  return { label: "Tradeable", chip: "auto-meh" };
 }
 
 function renderRosters() {
@@ -1572,25 +1595,22 @@ function renderRosters() {
   }
 
   const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
-  // Current KTC dynasty values: { normName: { value, position, ... } }.
   const ktcRaw = state.ktcDynasty.players || {};
   const ktcPlayers = {};
-  Object.entries(ktcRaw).forEach(([norm, entry]) => {
-    ktcPlayers[norm] = entry && entry.value ? entry.value : 0;
-  });
+  Object.entries(ktcRaw).forEach(([n, e]) => { ktcPlayers[n] = e && e.value ? e.value : 0; });
+  const ktcPicks = state.ktcDynasty.picks || {};
   const flockByName = {};
   ((state.flockLive && state.flockLive.allPlayers) || []).forEach(p => {
     flockByName[p.normName] = p.flockValue;
   });
-  const flockAvailable = Object.keys(flockByName).length > 0;
+  const tradedPicks = state.sleeper.traded_picks || [];
 
-  // Team selector
+  // ---------- Team selector ----------
   const users = latestSeason.users.slice().sort((a, b) =>
     canonicalOwnerName(userDisplay(a)).localeCompare(canonicalOwnerName(userDisplay(b)))
   );
   if (state.rosterTeam == null && users.length) state.rosterTeam = users[0].user_id;
   const opts = users.map(u => ({ value: u.user_id, label: canonicalOwnerName(userDisplay(u)) }));
-
   const controls = el("div", { class: "controls" });
   controls.appendChild(customSelect(opts, state.rosterTeam, v => {
     state.rosterTeam = v;
@@ -1606,7 +1626,80 @@ function renderRosters() {
   }
   const selectedName = canonicalOwnerName(userDisplay(selectedUser));
 
-  // Build league-wide per-position value totals to find weak / strong positions.
+  // ---------- Pick ownership map ----------
+  const currentRookieDraft = (latestSeason.drafts || []).find(
+    d => d.rounds === 3 && (d.status === "pre_draft" || d.status === "drafting" || d.status === "complete")
+  );
+  const slotMap = currentRookieDraft ? currentRookieDraft.slot_to_roster_id || {} : {};
+  const currentYear = parseInt(latestSeason.season, 10);
+  function tierFor(season, originalRosterId) {
+    if (season !== currentYear) return "mid";
+    const entry = Object.entries(slotMap).find(([, r]) => r === originalRosterId);
+    if (!entry) return "mid";
+    const slot = parseInt(entry[0], 10);
+    if (slot <= 4) return "early";
+    if (slot <= 8) return "mid";
+    return "late";
+  }
+  const FUTURE_YEARS = [currentYear, currentYear + 1, currentYear + 2];
+  const ROUNDS = [1, 2, 3];
+  function picksOwnedBy(rosterId) {
+    const out = [];
+    FUTURE_YEARS.forEach(season => {
+      ROUNDS.forEach(round => {
+        const trades = tradedPicks.filter(t => parseInt(t.season, 10) === season && t.round === round);
+        const tradedMap = new Map();
+        trades.forEach(t => tradedMap.set(t.roster_id, t.owner_id));
+        latestSeason.rosters.forEach(orig => {
+          const currentOwner = tradedMap.has(orig.roster_id) ? tradedMap.get(orig.roster_id) : orig.roster_id;
+          if (currentOwner !== rosterId) return;
+          const tier = tierFor(season, orig.roster_id);
+          const ktc = ktcPicks[`${season}|${tier}|${round}`] || 0;
+          const tierCap = tier.charAt(0).toUpperCase() + tier.slice(1);
+          const ord = round === 1 ? "st" : round === 2 ? "nd" : "rd";
+          out.push({
+            kind: "pick",
+            id: `pick:${season}:${round}:${orig.roster_id}`,
+            name: `${season} ${tierCap} ${round}${ord}`,
+            position: "PICK",
+            age: null,
+            ktc, flock: 0,
+            value: ktc,
+            tier: classifyAsset(ktc, "PICK", null),
+            season, round,
+          });
+        });
+      });
+    });
+    return out.sort((a, b) => b.value - a.value);
+  }
+
+  function enrichPlayer(pid) {
+    const p = state.sleeper.players[pid];
+    if (!p) return null;
+    const norm = ktcNormalizeName(p.name);
+    const ktc = ktcPlayers[norm] || 0;
+    const flock = flockByName[norm] || 0;
+    const blended = ktc && flock ? (ktc + flock) / 2 : (ktc || flock);
+    return {
+      kind: "player",
+      id: pid,
+      name: p.name,
+      position: p.position,
+      age: p.age,
+      ktc, flock,
+      value: blended,
+      tier: classifyAsset(blended, p.position, p.age),
+    };
+  }
+  function assetsForRoster(rosterId) {
+    const roster = latestSeason.rosters.find(r => r.roster_id === rosterId);
+    if (!roster) return [];
+    const players = (roster.players || []).map(enrichPlayer).filter(Boolean);
+    return players.concat(picksOwnedBy(rosterId));
+  }
+
+  // ---------- Positional need ----------
   const POS = ["QB", "RB", "WR", "TE"];
   const valueByPosByRoster = {};
   latestSeason.rosters.forEach(r => {
@@ -1614,42 +1707,20 @@ function renderRosters() {
     (r.players || []).forEach(pid => {
       const p = state.sleeper.players[pid];
       if (!p || !POS.includes(p.position)) return;
-      const v = ktcPlayers[ktcNormalizeName(p.name)] || 0;
-      byPos[p.position] += v;
+      byPos[p.position] += ktcPlayers[ktcNormalizeName(p.name)] || 0;
     });
     valueByPosByRoster[r.roster_id] = byPos;
   });
   const leagueAvgByPos = { QB: 0, RB: 0, WR: 0, TE: 0 };
   Object.values(valueByPosByRoster).forEach(b => POS.forEach(p => leagueAvgByPos[p] += b[p]));
   POS.forEach(p => leagueAvgByPos[p] /= latestSeason.rosters.length || 1);
-
   function isWeakAt(rosterId, position) {
     return valueByPosByRoster[rosterId][position] < leagueAvgByPos[position] * 0.85;
   }
-  function isStrongAt(rosterId, position) {
-    return valueByPosByRoster[rosterId][position] > leagueAvgByPos[position] * 1.10;
-  }
 
-  // Helper: enrich a player_id with KTC + Flock values and a blended tier.
-  function enrich(pid) {
-    const p = state.sleeper.players[pid];
-    if (!p) return null;
-    const norm = ktcNormalizeName(p.name);
-    const ktc = ktcPlayers[norm] || 0;
-    const flock = flockByName[norm] || 0;
-    let blended;
-    if (ktc && flock) blended = (ktc + flock) / 2;
-    else blended = ktc || flock;
-    return {
-      pid, name: p.name, position: p.position,
-      ktc, flock, value: blended,
-      tier: classifyAsset(blended),
-    };
-  }
+  const myAssets = assetsForRoster(selectedRoster.roster_id);
 
-  const myAssets = (selectedRoster.players || []).map(enrich).filter(Boolean);
-
-  // ===== Roster card grouped by classification =====
+  // ===== Roster card =====
   const rosterCard = el("div", { class: "card" }, el("h2", {}, selectedName + " — Roster"));
   const TIER_ORDER = ["Cornerstone", "Tradeable", "Wait & See", "Droppable"];
   const counts = { Cornerstone: 0, Tradeable: 0, "Wait & See": 0, Droppable: 0 };
@@ -1657,130 +1728,187 @@ function renderRosters() {
   const lede = el("div", { class: "card-lede" });
   lede.innerHTML = TIER_ORDER.map(t => `<strong>${counts[t]}</strong> ${t}`).join("  ·  ");
   rosterCard.appendChild(lede);
-
   TIER_ORDER.forEach(tier => {
     const tierAssets = myAssets.filter(a => a.tier.label === tier).sort((a, b) => b.value - a.value);
     if (!tierAssets.length) return;
     rosterCard.appendChild(el("div", { class: "round-header" }, tier + " (" + tierAssets.length + ")"));
     tierAssets.forEach(a => {
-      const row = el("div", { class: "pick-history-row" },
+      const valueBits = [];
+      if (a.ktc) valueBits.push("KTC " + a.ktc.toLocaleString());
+      if (a.flock) valueBits.push("Flock " + a.flock.toLocaleString());
+      const nameLine = el("div", {}, a.name);
+      if (a.position) nameLine.appendChild(el("span", { class: "pos-chip " + positionClass(a.position), style: "margin-left:8px" }, a.position));
+      if (a.age != null) nameLine.appendChild(el("span", { class: "pct", style: "margin-left:8px" }, "age " + a.age));
+      nameLine.appendChild(el("span", { class: "auto-grade-chip " + a.tier.chip, style: "margin-left:8px" }, a.tier.label));
+      rosterCard.appendChild(el("div", { class: "pick-history-row" },
         el("div", { class: "pick-history-slot" }, ""),
-        el("div", {},
-          a.name,
-          a.position ? el("span", { class: "pos-chip " + positionClass(a.position), style: "margin-left:8px" }, a.position) : null,
-          el("span", { class: "auto-grade-chip " + a.tier.chip, style: "margin-left:8px" }, a.tier.label),
-        ),
-        el("div", { class: "pick-history-by" }, (() => {
-          const bits = [];
-          if (a.ktc) bits.push("KTC " + a.ktc.toLocaleString());
-          if (a.flock) bits.push("Flock " + a.flock.toLocaleString());
-          return bits.length ? bits.join("  ·  ") : "—";
-        })()),
-      );
-      rosterCard.appendChild(row);
+        nameLine,
+        el("div", { class: "pick-history-by" }, valueBits.length ? valueBits.join("  ·  ") : "—"),
+      ));
     });
   });
   main.appendChild(rosterCard);
 
-  // ===== Suggested Trades card =====
+  // ===== Multi-asset Trade Explorer =====
   const tradeCard = el("div", { class: "card" }, el("h2", {}, "Suggested Trades"));
 
-  // Generate 1-for-1 swaps that fill mutual positional needs and balance KTC value.
-  // Bias: prefer the receiver helping a weak position with their tradeable surplus.
-  const trades = [];
-  const tradeableSelf = myAssets.filter(a =>
-    (a.tier.label === "Tradeable" || a.tier.label === "Wait & See") && a.value >= 1500
-  );
+  function movablePool(assets) {
+    return assets.filter(a =>
+      (a.tier.label === "Tradeable" || a.tier.label === "Wait & See") && a.value >= 1000
+    );
+  }
+  function rosterImpact(rosterId, gives, gets) {
+    const before = { ...valueByPosByRoster[rosterId] };
+    POS.forEach(pos => { before[pos] = before[pos] || 0; });
+    const after = { ...before };
+    gives.forEach(a => {
+      if (a.kind === "player" && POS.includes(a.position)) after[a.position] -= a.ktc || 0;
+    });
+    gets.forEach(a => {
+      if (a.kind === "player" && POS.includes(a.position)) after[a.position] += a.ktc || 0;
+    });
+    const fits = [];
+    POS.forEach(pos => {
+      const wasWeak = before[pos] < leagueAvgByPos[pos] * 0.85;
+      if (wasWeak && after[pos] > before[pos]) fits.push(pos);
+    });
+    return { before, after, fits };
+  }
+  function sumValues(assets) {
+    let ktc = 0, flock = 0;
+    assets.forEach(a => { ktc += a.ktc || 0; flock += a.flock || 0; });
+    return { ktc, flock };
+  }
+  function bothCalcsAgree(givesSum, getsSum, tol = 0.12) {
+    if (!givesSum.ktc || !getsSum.ktc) return false;
+    const ktcDiff = Math.abs(givesSum.ktc - getsSum.ktc) / Math.max(givesSum.ktc, getsSum.ktc);
+    if (ktcDiff > tol) return false;
+    if (givesSum.flock && getsSum.flock) {
+      const flockDiff = Math.abs(givesSum.flock - getsSum.flock) / Math.max(givesSum.flock, getsSum.flock);
+      if (flockDiff > tol) return false;
+    }
+    return true;
+  }
+  function combos(arr, k) {
+    if (k === 1) return arr.map(a => [a]);
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+      const tail = combos(arr.slice(i + 1), k - 1);
+      tail.forEach(t => out.push([arr[i], ...t]));
+    }
+    return out;
+  }
+
+  const myMovable = movablePool(myAssets);
+  const allTrades = [];
   latestSeason.rosters.forEach(other => {
     if (other.roster_id === selectedRoster.roster_id) return;
     const otherUser = latestSeason.users.find(u => u.user_id === other.owner_id);
     const otherName = otherUser ? canonicalOwnerName(userDisplay(otherUser)) : "—";
-    const otherAssets = (other.players || []).map(enrich).filter(Boolean);
-    const tradeableOther = otherAssets.filter(a =>
-      (a.tier.label === "Tradeable" || a.tier.label === "Wait & See") && a.value >= 1500
-    );
-    tradeableSelf.forEach(mine => {
-      tradeableOther.forEach(theirs => {
-        if (mine.position === theirs.position) return;
-        if (!isWeakAt(selectedRoster.roster_id, theirs.position)) return;
-        if (!isWeakAt(other.roster_id, mine.position)) return;
-        // Verify on every calculator we have data for. KTC always, Flock when
-        // both sides have a Flock entry. Worst (largest) diff is the limit.
-        const checks = [];
-        if (mine.ktc && theirs.ktc) checks.push(Math.abs(mine.ktc - theirs.ktc) / Math.max(mine.ktc, theirs.ktc));
-        if (mine.flock && theirs.flock) checks.push(Math.abs(mine.flock - theirs.flock) / Math.max(mine.flock, theirs.flock));
-        if (!checks.length) return;
-        const worstDiff = Math.max(...checks);
-        if (worstDiff > 0.15) return;
-        trades.push({
+    const otherAssets = assetsForRoster(other.roster_id);
+    const theirMovable = movablePool(otherAssets);
+    const myTrimmed = myMovable.slice().sort((a, b) => b.value - a.value).slice(0, 15);
+    const theirTrimmed = theirMovable.slice().sort((a, b) => b.value - a.value).slice(0, 15);
+    const mySides = combos(myTrimmed, 1).concat(combos(myTrimmed, 2));
+    const theirSides = combos(theirTrimmed, 1).concat(combos(theirTrimmed, 2));
+
+    mySides.forEach(gives => {
+      const gaveWeakPos = gives.some(g => g.kind === "player" && isWeakAt(selectedRoster.roster_id, g.position));
+      if (gaveWeakPos) return;
+      const myGivesSum = sumValues(gives);
+      theirSides.forEach(gets => {
+        if (gives.some(g => gets.some(t => g.id === t.id))) return;
+        const gaveTheirWeak = gets.some(g => g.kind === "player" && isWeakAt(other.roster_id, g.position));
+        if (gaveTheirWeak) return;
+        const getsSum = sumValues(gets);
+        if (!bothCalcsAgree(myGivesSum, getsSum)) return;
+        const myFinal = rosterImpact(selectedRoster.roster_id, gives, gets);
+        const theirFinal = rosterImpact(other.roster_id, gets, gives);
+        if (!myFinal.fits.length || !theirFinal.fits.length) return;
+        const ktcDiff = Math.abs(myGivesSum.ktc - getsSum.ktc) / Math.max(myGivesSum.ktc, getsSum.ktc);
+        const flockDiff = (myGivesSum.flock && getsSum.flock)
+          ? Math.abs(myGivesSum.flock - getsSum.flock) / Math.max(myGivesSum.flock, getsSum.flock)
+          : null;
+        const worstDiff = Math.max(ktcDiff, flockDiff != null ? flockDiff : 0);
+        const fairness = 1 - worstDiff;
+        const fitScore = (myFinal.fits.length + theirFinal.fits.length);
+        const sizeScore = Math.min(1, (myGivesSum.ktc + getsSum.ktc) / 20000);
+        const score = fairness * 0.6 + (fitScore / 4) * 0.25 + sizeScore * 0.15;
+        allTrades.push({
           partnerName: otherName,
-          send: mine,
-          recv: theirs,
-          diffPct: worstDiff,
-          fairness: 1 - worstDiff,
-          ktcChecked: mine.ktc && theirs.ktc,
-          flockChecked: mine.flock && theirs.flock,
+          partnerRosterId: other.roster_id,
+          gives, gets,
+          myGivesSum, getsSum,
+          myFits: myFinal.fits,
+          theirFits: theirFinal.fits,
+          fairness, score,
         });
       });
     });
   });
-  // Dedupe so the same partner doesn't dominate the list.
+
+  allTrades.sort((a, b) => b.score - a.score);
   const seenPartner = {};
-  const topTrades = trades
-    .sort((a, b) => b.fairness - a.fairness)
-    .filter(t => {
-      seenPartner[t.partnerName] = (seenPartner[t.partnerName] || 0) + 1;
-      return seenPartner[t.partnerName] <= 2;  // max 2 trades per partner
-    })
-    .slice(0, 8);
+  const seenKeys = new Set();
+  const topTrades = [];
+  for (const t of allTrades) {
+    if (topTrades.length >= 10) break;
+    const key = t.partnerRosterId + "|" + t.gives.map(g => g.id).sort().join(",") + "|" + t.gets.map(g => g.id).sort().join(",");
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const c = seenPartner[t.partnerName] || 0;
+    if (c >= 2) continue;
+    seenPartner[t.partnerName] = c + 1;
+    topTrades.push(t);
+  }
 
   if (!topTrades.length) {
     tradeCard.appendChild(el("div", { class: "empty" },
-      "No mutually-beneficial 1-for-1 trades found within 15% value. Try widening the tolerance or check back after roster moves."));
+      "No mutually-beneficial trades found within 12% value across 1-for-1, 2-for-1, 1-for-2, and 2-for-2 combinations."));
   } else {
     topTrades.forEach(t => {
       const block = el("div", { class: "trade-block" });
       block.appendChild(el("div", { class: "trade-header" },
         el("span", { class: "trade-date" }, "with " + t.partnerName),
-        el("span", { class: "trade-meta" }, `${Math.round(t.fairness * 100)}% fair`),
+        el("span", { class: "trade-meta" }, `${Math.round(t.fairness * 100)}% fair  ·  ${t.gives.length}-for-${t.gets.length}`),
       ));
       const cols = el("div", { class: "trade-cols" });
-      const sendCol = el("div", { class: "trade-col" },
-        el("div", { class: "trade-col-label" }, "You send"));
-      function valueLabel(a) {
-        const bits = [];
-        if (a.ktc) bits.push("KTC " + a.ktc.toLocaleString());
-        if (a.flock) bits.push("Flock " + a.flock.toLocaleString());
-        return bits.join("  ·  ");
+      function side(title, items) {
+        const col = el("div", { class: "trade-col" },
+          el("div", { class: "trade-col-label" }, title));
+        items.forEach(a => {
+          const valueBits = [];
+          if (a.ktc) valueBits.push("KTC " + a.ktc.toLocaleString());
+          if (a.flock) valueBits.push("Flock " + a.flock.toLocaleString());
+          col.appendChild(el("div", { class: "trade-line" },
+            el("span", { class: "trade-player" }, a.name),
+            el("span", { class: "pos-chip " + positionClass(a.position) }, a.position),
+            el("span", { class: "trade-where" }, valueBits.join("  ·  ")),
+          ));
+        });
+        const sum = sumValues(items);
+        col.appendChild(el("div", { class: "pct", style: "margin-top:6px" },
+          `Total: KTC ${Math.round(sum.ktc).toLocaleString()}` +
+          (sum.flock ? `  ·  Flock ${Math.round(sum.flock).toLocaleString()}` : "")));
+        return col;
       }
-      sendCol.appendChild(el("div", { class: "trade-line" },
-        el("span", { class: "trade-player" }, t.send.name),
-        el("span", { class: "pos-chip " + positionClass(t.send.position) }, t.send.position),
-        el("span", { class: "trade-where" }, valueLabel(t.send)),
-      ));
-      const recvCol = el("div", { class: "trade-col" },
-        el("div", { class: "trade-col-label" }, "You get"));
-      recvCol.appendChild(el("div", { class: "trade-line" },
-        el("span", { class: "trade-player" }, t.recv.name),
-        el("span", { class: "pos-chip " + positionClass(t.recv.position) }, t.recv.position),
-        el("span", { class: "trade-where" }, valueLabel(t.recv)),
-      ));
-      cols.appendChild(sendCol);
-      cols.appendChild(recvCol);
+      cols.appendChild(side("You send", t.gives));
+      cols.appendChild(side("You get", t.gets));
       block.appendChild(cols);
-      block.appendChild(el("div", { class: "pct", style: "margin-top:6px" },
-        `You're weak at ${t.recv.position}; ${t.partnerName} is weak at ${t.send.position}.`));
+      const fitBits = [];
+      if (t.myFits.length) fitBits.push("You fill: " + t.myFits.join(", "));
+      if (t.theirFits.length) fitBits.push(t.partnerName + " fills: " + t.theirFits.join(", "));
+      block.appendChild(el("div", { class: "pct", style: "margin-top:6px" }, fitBits.join("  ·  ")));
       tradeCard.appendChild(block);
     });
   }
   tradeCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
-    "Player values come from both KTC superflex dynasty (latest history snapshot) and FlockFantasy expert average (scaled to a 0-10000 range from #1 = 10000 to #" +
-    ((state.flockLive && state.flockLive.allPlayers && state.flockLive.allPlayers.length) || "—") +
-    " = 0). " +
-    "A swap qualifies only when every calculator with data on both sides agrees the value gap is < 15%. " +
-    "Both sides must also be below 85% of the league average at the position they receive (real positional fit). " +
-    "Up to 2 ideas per partner, top 8 overall by fairness. " +
-    (flockAvailable ? "" : "Flock data is still loading; KTC-only matching is shown until it arrives.")
+    "Algorithm: exhaustive search across all 1-for-1, 2-for-1, 1-for-2, and 2-for-2 swaps between you and every other manager, " +
+    "with future draft picks included in the movable pool. Each side's movable pool is its Tradeable + Wait & See assets (KTC value ≥ 1000). " +
+    "Asset tiers use a position-aware age curve (QB cliff 33, WR 28, TE 30, RB 26 — picks classified by value alone). " +
+    "A swap qualifies only when (a) every calculator with data on both sides agrees the value gap is < 12%, " +
+    "(b) the giver is not parting with a position they're already weak at, and (c) at least one weak position improves on each side. " +
+    "Top 10 by composite score (60% fairness, 25% mutual position-fit count, 15% trade size); max 2 ideas per partner."
   ));
   main.appendChild(tradeCard);
 }

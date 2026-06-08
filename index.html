@@ -1893,10 +1893,11 @@ function renderRosters() {
         const worstDiff = Math.max(ktcDiff, flockDiff != null ? flockDiff : 0);
         const fairness = 1 - worstDiff;
         const fitScore = (myFinal.fits.length + theirFinal.fits.length);
-        const sizeScore = Math.min(1, (myGivesSum.ktc + getsSum.ktc) / 20000);
-        // Slightly down-weight larger combos to bias toward simpler swaps when fairness is similar.
-        const sizePenalty = (gives.length + gets.length - 2) * 0.01;
-        const score = fairness * 0.6 + (fitScore / 4) * 0.25 + sizeScore * 0.15 - sizePenalty;
+        // Penalize combo size hard so simpler swaps win on ties. A 3-for-3
+        // needs to be substantially fairer or fill more gaps than a 1-for-1
+        // to outrank it.
+        const sizePenalty = (gives.length + gets.length - 2) * 0.06;
+        const score = fairness * 0.7 + (fitScore / 4) * 0.30 - sizePenalty;
         allTrades.push({
           partnerName: otherName,
           partnerRosterId: other.roster_id,
@@ -1912,6 +1913,7 @@ function renderRosters() {
 
   allTrades.sort((a, b) => b.score - a.score);
   const seenPartner = {};
+  const seenSize = {};
   const seenKeys = new Set();
   const topTrades = [];
   for (const t of allTrades) {
@@ -1921,7 +1923,12 @@ function renderRosters() {
     seenKeys.add(key);
     const c = seenPartner[t.partnerName] || 0;
     if (c >= 2) continue;
+    const sizeKey = t.gives.length + "x" + t.gets.length;
+    const sc = seenSize[sizeKey] || 0;
+    // Cap per combo-size so 3-for-3 trades can't dominate the list.
+    if (sc >= 3) continue;
     seenPartner[t.partnerName] = c + 1;
+    seenSize[sizeKey] = sc + 1;
     topTrades.push(t);
   }
 
@@ -1979,7 +1986,7 @@ function renderRosters() {
     "(b) the giver is not parting with a position they're already weak at, and " +
     "(c) at least one need-set position improves on each side. " +
     "Need set = positions below 85% of league average value; if a roster has none, the two weakest starter positions are used as the need set instead. " +
-    "Top 10 by composite score (60% fairness + 25% mutual fit count + 15% size − small penalty for larger combos); max 2 per partner."
+    "Top 10 by composite score (70% fairness + 30% mutual fit count, with a size penalty so simpler swaps win ties); max 2 per partner and max 3 per combo size."
   ));
   main.appendChild(tradeCard);
 }

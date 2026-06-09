@@ -1879,6 +1879,38 @@ function renderRosters() {
     return out;
   }
 
+  // ---------- Manager type per roster (Contender / Middler / Reloader) ----------
+  // Reuses the same algorithm as the Teams > League Power view so trade
+  // recommendations align with what that view shows.
+  const ranked = computeManagerRankings();
+  const managerType = {};
+  if (ranked) {
+    ranked.forEach(r => { managerType[r.roster_id] = classifyManager(r.composite).label; });
+  }
+  const myType = managerType[selectedRoster.roster_id] || "Middler";
+
+  // How well a given asset fits the recipient's window. 0..1, higher = better.
+  function typeAlignment(asset, type) {
+    if (asset.kind === "pick") {
+      const yearOffset = Math.max(0, Math.min(2, asset.season - currentYear));
+      if (type === "Contender") return [1.00, 0.55, 0.30][yearOffset];
+      if (type === "Reloader")  return [0.40, 0.80, 1.00][yearOffset];
+      return                       [0.65, 0.70, 0.65][yearOffset];
+    }
+    const curve = POSITION_AGE_CURVE[asset.position];
+    if (!curve || asset.age == null) return 0.65;
+    const young = asset.age <= curve.rising;
+    const old = asset.age >= curve.cliff;
+    const inPrime = !young && !old;
+    if (type === "Contender") return old ? 0.30 : inPrime ? 1.00 : 0.70;
+    if (type === "Reloader")  return young ? 1.00 : inPrime ? 0.55 : 0.15;
+    return inPrime ? 0.85 : 0.70;
+  }
+  function alignmentAvg(assets, type) {
+    if (!assets.length) return 0.65;
+    return assets.reduce((s, a) => s + typeAlignment(a, type), 0) / assets.length;
+  }
+
   const myMovable = movablePool(myAssets);
   const myNeed = needSetFor(selectedRoster.roster_id);
   const myHasRealWeakness = POS.some(p => isWeakAt(selectedRoster.roster_id, p));
@@ -1937,7 +1969,12 @@ function renderRosters() {
           return side.filter(a => a.kind === "pick").length / side.length;
         }
         const mixBonus = Math.abs(pickFraction(gives) - pickFraction(gets)) * 0.10;
-        const score = fairness * 0.65 + (fitScore / 4) * 0.25 + mixBonus - sizePenalty;
+        // Type alignment: how well "what you receive" fits your team's window.
+        const theirType = managerType[other.roster_id] || "Middler";
+        const myAlign = alignmentAvg(gets, myType);
+        const theirAlign = alignmentAvg(gives, theirType);
+        const alignScore = (myAlign + theirAlign) / 2;
+        const score = fairness * 0.50 + (fitScore / 4) * 0.20 + alignScore * 0.20 + mixBonus - sizePenalty;
         allTrades.push({
           partnerName: otherName,
           partnerRosterId: other.roster_id,
@@ -1996,10 +2033,22 @@ function renderRosters() {
     topTrades.push(t);
   }
 
+  // Type banner: tells the user what slant their recommendations are getting.
+  const typeBanner = el("div", { class: "card-lede" });
+  if (myType === "Contender") {
+    typeBanner.innerHTML = `<strong>${selectedName}</strong> is a <strong>Contender</strong>. ` +
+      `Trade suggestions favor proven, in-prime players and near-term picks.`;
+  } else if (myType === "Reloader") {
+    typeBanner.innerHTML = `<strong>${selectedName}</strong> is a <strong>Reloader</strong>. ` +
+      `Trade suggestions favor young upside players and future picks.`;
+  } else {
+    typeBanner.innerHTML = `<strong>${selectedName}</strong> is a <strong>Middler</strong>. ` +
+      `Trade suggestions balance proven production and upside.`;
+  }
+  tradeCard.appendChild(typeBanner);
   if (!myHasRealWeakness) {
-    tradeCard.appendChild(el("div", { class: "card-lede" },
-      `${selectedName} has no positions below 85% of league average. ` +
-      `Showing trades that strengthen the weakest spots of the starting lineup (${[...myNeed].join(", ") || "—"}).`));
+    tradeCard.appendChild(el("div", { class: "pct", style: "margin-bottom:10px" },
+      `No positions below 85% of league average. Targeting weakest starter spots: ${[...myNeed].join(", ") || "—"}.`));
   }
   if (!topTrades.length) {
     tradeCard.appendChild(el("div", { class: "empty" },
@@ -2007,8 +2056,9 @@ function renderRosters() {
   } else {
     topTrades.forEach(t => {
       const block = el("div", { class: "trade-block" });
+      const partnerType = managerType[t.partnerRosterId] || "Middler";
       block.appendChild(el("div", { class: "trade-header" },
-        el("span", { class: "trade-date" }, "with " + t.partnerName),
+        el("span", { class: "trade-date" }, `with ${t.partnerName} (${partnerType})`),
         el("span", { class: "trade-meta" }, `${Math.round(t.fairness * 100)}% fair  ·  ${t.gives.length}-for-${t.gets.length}`),
       ));
       const cols = el("div", { class: "trade-cols" });
@@ -2050,7 +2100,8 @@ function renderRosters() {
     "(b) the giver is not parting with a position they're already weak at, and " +
     "(c) at least one need-set position improves on each side. " +
     "Need set = positions below 85% of league average value; if a roster has none, the two weakest starter positions are used as the need set instead. " +
-    "Top 10 by composite score (65% fairness + 25% mutual fit count + up to 10% bonus for player↔pick asymmetry, minus a size penalty); " +
+    "Composite score: 50% fairness + 20% mutual fit count + 20% type alignment + up to 10% player↔pick mix bonus − size penalty. " +
+    "Type alignment rewards trades where Contenders receive in-prime players and near-term picks while Reloaders receive young players and future picks; Middlers stay neutral. " +
     "max 2 per partner, max 3 per combo size, max 3 trades involving any Cornerstone asset, and capped at 4 player-only and 2 pick-only trades so the list spans every trade type."
   ));
   main.appendChild(tradeCard);

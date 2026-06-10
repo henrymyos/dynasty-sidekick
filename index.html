@@ -561,6 +561,160 @@
   .action-btn.primary:hover { background: rgba(88,166,255,0.25); }
   .action-btn.copied { background: rgba(46,160,67,0.18); border-color: rgba(46,160,67,0.5); color: var(--hit); }
   .trade-block .action-row { margin-top: 8px; margin-bottom: 0; }
+
+  /* ----- Lineup / Waivers polish ----- */
+  .lineup-row {
+    display: grid;
+    grid-template-columns: 56px 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    margin-bottom: 6px;
+    border-left: 3px solid transparent;
+  }
+  .lineup-row.is-empty { opacity: 0.55; font-style: italic; }
+  .lineup-row.pos-qb { border-left-color: #e06666; }
+  .lineup-row.pos-rb { border-left-color: #6aa84f; }
+  .lineup-row.pos-wr { border-left-color: #3c78d8; }
+  .lineup-row.pos-te { border-left-color: #f6b26b; }
+  .lineup-row.is-bench { background: transparent; padding: 6px 10px; border-radius: 4px; }
+  .lineup-row.is-bench:hover { background: var(--panel-2); }
+  .slot-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .player-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .player-name-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+  }
+  .player-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .player-meta-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    flex-wrap: wrap;
+  }
+  .matchup { color: var(--muted); font-size: 12px; }
+  .opp { color: var(--text-sub, var(--muted)); }
+  .injury-chip {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(248,81,73,0.15);
+    color: var(--miss);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+  .upgrade-chip {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(46,160,67,0.18);
+    color: var(--hit);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .proj-points {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    min-width: 50px;
+  }
+  .proj-points.dim { opacity: 0.55; }
+  .proj-sub {
+    display: block;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+    margin-top: 1px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .sub-header {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin: 16px 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sub-header .count {
+    background: var(--panel-2);
+    color: var(--muted);
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+  }
+  .offseason-banner {
+    background: rgba(210,153,34,0.10);
+    border: 1px solid rgba(210,153,34,0.3);
+    color: var(--meh);
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .pos-filter {
+    display: inline-flex;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .pos-filter button {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .pos-filter button.active {
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  .pos-filter button:hover:not(.active) { color: var(--text); }
   .pill-weak { background: rgba(248,81,73,0.15); color: var(--miss); }
   .pill-avg { background: var(--panel-2); color: var(--muted); }
 
@@ -879,6 +1033,7 @@ let state = {
   lineupData: null,            // weekly projections + league settings
   lineupDataLoading: false,
   lineupDataError: null,
+  waiversFilter: "ALL",        // "ALL" | "QB" | "RB" | "WR" | "TE"
   leaderboardRound: null,
   statsRound: null,
   statsInsightDrafter: null,
@@ -2237,6 +2392,49 @@ function teamPickerControls(latestSeason) {
   return { controls, users };
 }
 
+// Render a single player into a .lineup-row.
+function renderPlayerRow(player, opts) {
+  opts = opts || {};
+  const row = el("div", { class: "lineup-row " + (opts.bench ? "is-bench " : "") + (player ? "pos-" + (player.position || "").toLowerCase() : "is-empty") });
+  row.appendChild(el("span", { class: "slot-chip" }, opts.slotLabel || "·"));
+  if (!player) {
+    const block = el("div", { class: "player-block" },
+      el("div", { class: "player-name-line" }, el("span", { class: "player-name pct" }, "no eligible player")),
+    );
+    row.appendChild(block);
+    row.appendChild(el("div", { class: "proj-points dim" }, "—"));
+    return row;
+  }
+  const block = el("div", { class: "player-block" });
+  const nameLine = el("div", { class: "player-name-line" },
+    el("span", { class: "player-name" }, player.name),
+    el("span", { class: "pos-chip " + positionClass(player.position) }, player.position),
+  );
+  if (player.injury) nameLine.appendChild(el("span", { class: "injury-chip" }, player.injury));
+  block.appendChild(nameLine);
+  const metaLine = el("div", { class: "player-meta-line" });
+  const metaParts = [];
+  if (player.team) metaParts.push(player.team);
+  if (player.opponent) metaParts.push("vs " + player.opponent);
+  metaLine.appendChild(el("span", { class: "matchup" }, metaParts.join(" · ")));
+  if (opts.upgrade) {
+    const u = opts.upgrade;
+    const label = u.replaced
+      ? `+${u.diff.toFixed(1)} over ${u.replaced.name}`
+      : `Fills empty ${u.slot === "SUPER_FLEX" ? "SF" : u.slot}`;
+    metaLine.appendChild(el("span", { class: "upgrade-chip" }, label));
+  } else if (opts.stash) {
+    metaLine.appendChild(el("span", { class: "pct" }, "Stash · KTC " + opts.stash.toLocaleString()));
+  }
+  block.appendChild(metaLine);
+  row.appendChild(block);
+  const proj = el("div", { class: "proj-points" + (player.projected ? "" : " dim") },
+    player.projected != null ? player.projected.toFixed(1) : "—");
+  proj.appendChild(el("span", { class: "proj-sub" }, "pts"));
+  row.appendChild(proj);
+  return row;
+}
+
 function renderLineup() {
   const main = document.getElementById("main");
   main.innerHTML = "";
@@ -2270,16 +2468,13 @@ function renderLineup() {
   const scoring = league.scoring_settings || {};
   const rosterPositions = league.roster_positions || [];
 
-  // Enrich every player on the roster with projected points.
   const candidates = (selectedRoster.players || []).map(pid => {
     const p = state.sleeper.players[pid];
     if (!p) return null;
     const proj = projections[pid];
     const projected = proj ? scoreProjection(proj.stats, scoring) : 0;
     return {
-      id: pid,
-      name: p.name,
-      position: p.position,
+      id: pid, name: p.name, position: p.position,
       team: proj ? proj.team : p.team,
       projected,
       opponent: proj ? proj.opponent : null,
@@ -2292,17 +2487,52 @@ function renderLineup() {
   const projectedTotal = lineup.reduce((s, l) => s + (l.player ? l.player.projected : 0), 0);
   const offSeason = state.lineupData.season_type === "off" || projectedTotal < 1;
 
-  // Header / total
-  const header = el("div", { class: "card-lede" });
-  header.innerHTML = `<strong>${selectedName}</strong> · ${season} week ${week} · ` +
-    `projected total <strong>${projectedTotal.toFixed(1)}</strong> pts` +
-    (offSeason ? " <span style='color:var(--meh)'>(off-season — projections may be sparse)</span>" : "");
+  const bench = candidates.filter(c => !startedIds.has(c.id))
+    .sort((a, b) => b.projected - a.projected);
+  function bestUpgrade(b) {
+    let best = null;
+    lineup.forEach(s => {
+      const eligible = (s.slot === b.position)
+        || (s.slot === "FLEX" && ["RB","WR","TE"].includes(b.position))
+        || ((s.slot === "SUPER_FLEX" || s.slot === "SF") && ["QB","RB","WR","TE"].includes(b.position));
+      if (!eligible) return;
+      if (!s.player) { best = { diff: b.projected, replaced: null, slot: s.slot }; return; }
+      const diff = b.projected - s.player.projected;
+      if (diff > 0 && (!best || diff > best.diff)) {
+        best = { diff, replaced: s.player, slot: s.slot };
+      }
+    });
+    return best;
+  }
+  const upgrades = bench.map(b => ({ player: b, upgrade: bestUpgrade(b) }))
+    .filter(x => x.upgrade)
+    .sort((a, b) => b.upgrade.diff - a.upgrade.diff);
+  const upgradeIds = new Set(upgrades.map(u => u.player.id));
+  const others = bench.filter(b => !upgradeIds.has(b.id));
+  const injuredStarters = lineup.filter(s => s.player && s.player.injury).length;
 
-  // ----- Starters card -----
-  const startersCard = el("div", { class: "card" }, el("h2", {}, "Optimal Lineup"));
-  startersCard.appendChild(header);
-
-  // Action row: copy lineup text + open the team page in Sleeper.
+  // Header card
+  const headerCard = el("div", { class: "card" });
+  headerCard.appendChild(el("h2", {}, selectedName + " — Week " + week));
+  if (offSeason) {
+    headerCard.appendChild(el("div", { class: "offseason-banner" },
+      "Off-season — Sleeper's projection endpoint returns zero values until games start. The lineup ordering still works; totals will read 0.0 until then."
+    ));
+  }
+  headerCard.appendChild(el("div", { class: "stat-grid" },
+    el("div", { class: "stat" },
+      el("div", { class: "stat-label" }, "Projected"),
+      el("div", { class: "stat-value" }, projectedTotal.toFixed(1)),
+    ),
+    el("div", { class: "stat" },
+      el("div", { class: "stat-label" }, "Bench Upgrades"),
+      el("div", { class: "stat-value" }, String(upgrades.length)),
+    ),
+    el("div", { class: "stat" },
+      el("div", { class: "stat-label" }, "Injured Starters"),
+      el("div", { class: "stat-value" }, String(injuredStarters)),
+    ),
+  ));
   function buildLineupText() {
     const lines = [`${selectedName} — Week ${week} Optimal Lineup (proj ${projectedTotal.toFixed(1)})`];
     lineup.forEach(({ slot, player }) => {
@@ -2315,88 +2545,42 @@ function renderLineup() {
   const startersActions = el("div", { class: "action-row" });
   startersActions.appendChild(actionButton("Copy lineup", (e, btn) => copyToClipboard(buildLineupText(), btn)));
   startersActions.appendChild(actionButton("Open in Sleeper ↗", null, { href: sleeperUrl("/team"), primary: true }));
-  startersCard.appendChild(startersActions);
+  headerCard.appendChild(startersActions);
+  main.appendChild(headerCard);
+
+  // Lineup card
+  const lineupCard = el("div", { class: "card" }, el("h2", {}, "Optimal Lineup"));
   lineup.forEach(({ slot, player }) => {
     const slotLabel = slot === "SUPER_FLEX" ? "SF" : slot;
-    if (!player) {
-      startersCard.appendChild(el("div", { class: "pick-history-row" },
-        el("div", { class: "pick-history-slot" }, slotLabel),
-        el("div", {}, el("span", { class: "pct" }, "no eligible player")),
-        el("div", { class: "pick-history-by" }, "—"),
-      ));
-      return;
-    }
-    const playerCell = el("div", {});
-    playerCell.appendChild(document.createTextNode(player.name));
-    playerCell.appendChild(el("span", { class: "pos-chip " + positionClass(player.position), style: "margin-left:8px" }, player.position));
-    if (player.team) playerCell.appendChild(el("span", { class: "pct", style: "margin-left:6px" }, player.team));
-    if (player.opponent) playerCell.appendChild(el("span", { class: "pct", style: "margin-left:4px" }, "vs " + player.opponent));
-    if (player.injury) playerCell.appendChild(el("span", { class: "auto-grade-chip auto-miss", style: "margin-left:8px" }, player.injury));
-    startersCard.appendChild(el("div", { class: "pick-history-row" },
-      el("div", { class: "pick-history-slot" }, slotLabel),
-      playerCell,
-      el("div", { class: "pick-history-by" }, player.projected.toFixed(1)),
-    ));
+    lineupCard.appendChild(renderPlayerRow(player, { slotLabel }));
   });
-  main.appendChild(startersCard);
+  main.appendChild(lineupCard);
 
-  // ----- Bench card (everyone else, sorted by projection) -----
-  const benchCard = el("div", { class: "card" }, el("h2", {}, "Bench / Alternatives"));
-  const bench = candidates.filter(c => !startedIds.has(c.id))
-    .sort((a, b) => b.projected - a.projected);
-  if (!bench.length) {
-    benchCard.appendChild(el("div", { class: "empty" }, "Bench is empty."));
-  } else {
-    // For each bench player, find what they'd replace and whether it would help.
-    bench.forEach(b => {
-      const eligibleSlots = lineup.filter(s => {
-        if (!s.player) return s.slot === b.position
-          || (s.slot === "FLEX" && ["RB","WR","TE"].includes(b.position))
-          || ((s.slot === "SUPER_FLEX" || s.slot === "SF") && ["QB","RB","WR","TE"].includes(b.position));
-        if (s.slot === b.position) return true;
-        if (s.slot === "FLEX" && ["RB","WR","TE"].includes(b.position)) return true;
-        if ((s.slot === "SUPER_FLEX" || s.slot === "SF") && ["QB","RB","WR","TE"].includes(b.position)) return true;
-        return false;
-      });
-      let bestSwap = null;
-      eligibleSlots.forEach(s => {
-        if (!s.player) {
-          bestSwap = { slot: s.slot, diff: b.projected, replaced: null };
-          return;
-        }
-        const diff = b.projected - s.player.projected;
-        if (diff > 0 && (!bestSwap || diff > bestSwap.diff)) {
-          bestSwap = { slot: s.slot, diff, replaced: s.player };
-        }
-      });
-      const note = bestSwap
-        ? (bestSwap.replaced
-            ? `+${bestSwap.diff.toFixed(1)} if started over ${bestSwap.replaced.name} (${bestSwap.slot === "SUPER_FLEX" ? "SF" : bestSwap.slot})`
-            : `Could fill empty ${bestSwap.slot === "SUPER_FLEX" ? "SF" : bestSwap.slot}`)
-        : "no upgrade";
-      const noteClass = bestSwap && bestSwap.diff > 0 ? "delta-pos" : "pct";
-      const cell = el("div", {});
-      cell.appendChild(document.createTextNode(b.name));
-      cell.appendChild(el("span", { class: "pos-chip " + positionClass(b.position), style: "margin-left:8px" }, b.position));
-      if (b.team) cell.appendChild(el("span", { class: "pct", style: "margin-left:6px" }, b.team));
-      if (b.opponent) cell.appendChild(el("span", { class: "pct", style: "margin-left:4px" }, "vs " + b.opponent));
-      if (b.injury) cell.appendChild(el("span", { class: "auto-grade-chip auto-miss", style: "margin-left:8px" }, b.injury));
-      cell.appendChild(el("span", { class: noteClass, style: "margin-left:8px; font-size: 12px" }, note));
-      benchCard.appendChild(el("div", { class: "pick-history-row" },
-        el("div", { class: "pick-history-slot" }, ""),
-        cell,
-        el("div", { class: "pick-history-by" }, b.projected.toFixed(1)),
-      ));
+  // Bench card
+  const benchCard = el("div", { class: "card" }, el("h2", {}, "Bench"));
+  if (upgrades.length) {
+    benchCard.appendChild(el("div", { class: "sub-header" },
+      "Upgrades available", el("span", { class: "count" }, String(upgrades.length))));
+    upgrades.forEach(({ player, upgrade }) => {
+      benchCard.appendChild(renderPlayerRow(player, {
+        bench: true,
+        slotLabel: upgrade.slot === "SUPER_FLEX" ? "SF" : upgrade.slot,
+        upgrade,
+      }));
     });
+  }
+  if (others.length) {
+    benchCard.appendChild(el("div", { class: "sub-header" },
+      "No upgrade", el("span", { class: "count" }, String(others.length))));
+    others.forEach(p => benchCard.appendChild(renderPlayerRow(p, { bench: true, slotLabel: p.position })));
+  }
+  if (!upgrades.length && !others.length) {
+    benchCard.appendChild(el("div", { class: "empty" }, "Bench is empty."));
   }
   main.appendChild(benchCard);
 
-  // Footer
   main.appendChild(el("div", { class: "pct", style: "margin-top:14px" },
-    "Projections from Sleeper's public weekly endpoint (RotoWire), scored using your league's scoring_settings (PPR + every bonus). " +
-    "Starting slots filled greedily highest-projection first into QB → RB → WR → TE → FLEX (RB/WR/TE) → SF (any). " +
-    "Bench rows show each player's best one-for-one upgrade if any starter has a lower projection. " +
-    "Off-season or pre-game-script weeks may show zero projections until Sleeper populates them."
+    "Projections scored with your league's scoring_settings. Starters filled greedily highest-projection first into QB → RB → WR → TE → FLEX (RB/WR/TE) → SF (any). Bench upgrades show the swap that would gain the most points."
   ));
 }
 
@@ -2430,121 +2614,183 @@ function renderWaivers() {
   }
   const selectedName = canonicalOwnerName(userDisplay(selectedUser));
 
-  const { week, season, projections, league } = state.lineupData;
+  const { week, projections, league, season_type } = state.lineupData;
   const scoring = league.scoring_settings || {};
   const rosterPositions = league.roster_positions || [];
+  const offSeason = season_type === "off";
 
-  // Find rostered player_ids across the whole league.
   const rostered = new Set();
   latestSeason.rosters.forEach(r => (r.players || []).forEach(pid => rostered.add(pid)));
 
-  // Build free-agent list: anyone with a projection > 0 not on any roster.
   const ktcRaw = (state.ktcDynasty && state.ktcDynasty.players) || {};
   const FA_PLAYABLE = new Set(["QB", "RB", "WR", "TE"]);
-  const fas = [];
-  Object.entries(projections).forEach(([pid, proj]) => {
-    if (rostered.has(pid)) return;
-    const sp = state.sleeper.players[pid];
-    if (!sp) return;
-    if (!FA_PLAYABLE.has(sp.position)) return;
-    const projected = scoreProjection(proj.stats, scoring);
-    if (projected <= 0) return;
-    const ktc = ktcRaw[ktcNormalizeName(sp.name)] || null;
-    fas.push({
-      id: pid,
-      name: sp.name,
-      position: sp.position,
-      team: proj.team || sp.team,
-      opponent: proj.opponent,
-      injury: proj.injury_status,
-      projected,
-      ktcValue: ktc ? ktc.value : 0,
-    });
-  });
-  fas.sort((a, b) => b.projected - a.projected);
 
-  // Build the user's optimal lineup for upgrade comparison.
+  // Build FA list. Off-season has 0 projections — fall back to KTC values.
+  const fas = [];
+  if (offSeason) {
+    for (const pid in state.sleeper.players) {
+      if (rostered.has(pid)) continue;
+      const sp = state.sleeper.players[pid];
+      if (!sp || !FA_PLAYABLE.has(sp.position)) continue;
+      const ktc = ktcRaw[ktcNormalizeName(sp.name)];
+      if (!ktc || !ktc.value || ktc.value < 1500) continue;
+      const proj = projections[pid];
+      fas.push({
+        id: pid, name: sp.name, position: sp.position,
+        team: (proj && proj.team) || sp.team || null,
+        opponent: (proj && proj.opponent) || null,
+        injury: (proj && proj.injury_status) || null,
+        projected: proj ? scoreProjection(proj.stats, scoring) : 0,
+        ktcValue: ktc.value,
+      });
+    }
+  } else {
+    Object.entries(projections).forEach(([pid, proj]) => {
+      if (rostered.has(pid)) return;
+      const sp = state.sleeper.players[pid];
+      if (!sp || !FA_PLAYABLE.has(sp.position)) return;
+      const projected = scoreProjection(proj.stats, scoring);
+      if (projected <= 0) return;
+      const ktc = ktcRaw[ktcNormalizeName(sp.name)] || null;
+      fas.push({
+        id: pid, name: sp.name, position: sp.position,
+        team: proj.team || sp.team,
+        opponent: proj.opponent,
+        injury: proj.injury_status,
+        projected,
+        ktcValue: ktc ? ktc.value : 0,
+      });
+    });
+  }
+
   const ownCandidates = (selectedRoster.players || []).map(pid => {
     const p = state.sleeper.players[pid];
     if (!p) return null;
     const proj = projections[pid];
     return {
-      id: pid,
-      name: p.name,
-      position: p.position,
+      id: pid, name: p.name, position: p.position,
       projected: proj ? scoreProjection(proj.stats, scoring) : 0,
     };
   }).filter(Boolean);
   const lineup = fillOptimalLineup(rosterPositions, ownCandidates);
-  function bestReplacement(fa) {
+  function bestUpgrade(fa) {
     let best = null;
     lineup.forEach(s => {
-      if (!s.player) return;
-      const eligible = s.slot === fa.position
+      const eligible = (s.slot === fa.position)
         || (s.slot === "FLEX" && ["RB","WR","TE"].includes(fa.position))
         || ((s.slot === "SUPER_FLEX" || s.slot === "SF") && ["QB","RB","WR","TE"].includes(fa.position));
       if (!eligible) return;
+      if (!s.player) { best = { diff: fa.projected, replaced: null, slot: s.slot }; return; }
       const diff = fa.projected - s.player.projected;
-      if (diff > 0 && (!best || diff > best.diff)) best = { diff, replaced: s.player, slot: s.slot };
+      if (diff > 0 && (!best || diff > best.diff)) {
+        best = { diff, replaced: s.player, slot: s.slot };
+      }
     });
     return best;
   }
 
-  // Header: how many upgrade-grade FAs exist for this roster
-  const upgrades = fas.map(fa => ({ fa, repl: bestReplacement(fa) })).filter(x => x.repl);
-  const lede = el("div", { class: "card-lede" });
-  lede.innerHTML = `<strong>${selectedName}</strong> · week ${week} · ` +
-    `<strong>${upgrades.length}</strong> free agents project as immediate upgrades to a starter`;
+  fas.sort((a, b) => {
+    if (offSeason) return b.ktcValue - a.ktcValue;
+    if (b.projected !== a.projected) return b.projected - a.projected;
+    return b.ktcValue - a.ktcValue;
+  });
+  const filter = state.waiversFilter || "ALL";
+  const filtered = filter === "ALL" ? fas : fas.filter(f => f.position === filter);
+  const upgrades = filtered.map(fa => ({ fa, upgrade: bestUpgrade(fa) })).filter(x => x.upgrade);
+  const stashes = filtered.filter(fa => !bestUpgrade(fa) && fa.ktcValue >= 1500);
+  const lowValue = filtered.filter(fa => !bestUpgrade(fa) && !(fa.ktcValue >= 1500));
 
-  // ----- Top FAs card -----
-  const faCard = el("div", { class: "card" }, el("h2", {}, "Top Free Agents"));
-  faCard.appendChild(lede);
-  function buildWaiverText() {
-    const lines = [`${selectedName} — Week ${week} Free Agent Adds (ranked)`];
-    fas.slice(0, 15).forEach((fa, i) => {
-      const repl = bestReplacement(fa);
-      const note = repl ? `  +${repl.diff.toFixed(1)} over ${repl.replaced.name}` : "";
-      lines.push(`  ${i + 1}. ${fa.name} (${fa.position}${fa.team ? " " + fa.team : ""})  proj ${fa.projected.toFixed(1)}${note}`);
+  // Header card
+  const headerCard = el("div", { class: "card" });
+  headerCard.appendChild(el("h2", {}, selectedName + " — Free Agents · Week " + week));
+  if (offSeason) {
+    headerCard.appendChild(el("div", { class: "offseason-banner" },
+      "Off-season — projections are zero. Showing free agents ranked by KTC dynasty value so you can plan stashes ahead of the season."));
+  }
+  headerCard.appendChild(el("div", { class: "stat-grid" },
+    el("div", { class: "stat" },
+      el("div", { class: "stat-label" }, "Total FAs"),
+      el("div", { class: "stat-value" }, String(filtered.length)),
+    ),
+    el("div", { class: "stat" },
+      el("div", { class: "stat-label" }, "Lineup Upgrades"),
+      el("div", { class: "stat-value" }, String(upgrades.length)),
+    ),
+    el("div", { class: "stat" },
+      el("div", { class: "stat-label" }, "Stash Candidates"),
+      el("div", { class: "stat-value" }, String(stashes.length)),
+    ),
+  ));
+  const filterRow = el("div", { class: "action-row" });
+  const posFilter = el("div", { class: "pos-filter" });
+  ["ALL", "QB", "RB", "WR", "TE"].forEach(p => {
+    const btn = el("button", { class: state.waiversFilter === p ? "active" : "" }, p === "ALL" ? "All" : p);
+    btn.addEventListener("click", () => {
+      state.waiversFilter = p;
+      render();
     });
+    posFilter.appendChild(btn);
+  });
+  filterRow.appendChild(posFilter);
+  function buildWaiverText() {
+    const lines = [`${selectedName} — Week ${week} Free Agent Adds`];
+    if (upgrades.length) {
+      lines.push("Upgrades:");
+      upgrades.slice(0, 10).forEach((u, i) => {
+        const tail = u.upgrade.replaced ? ` over ${u.upgrade.replaced.name}` : "";
+        lines.push(`  ${i + 1}. ${u.fa.name} (${u.fa.position})  proj ${u.fa.projected.toFixed(1)}  +${u.upgrade.diff.toFixed(1)}${tail}`);
+      });
+    }
+    if (stashes.length) {
+      lines.push("Stashes:");
+      stashes.slice(0, 5).forEach((s, i) => {
+        lines.push(`  ${i + 1}. ${s.name} (${s.position})  KTC ${s.ktcValue.toLocaleString()}`);
+      });
+    }
     return lines.join("\n");
   }
-  const waiverActions = el("div", { class: "action-row" });
-  waiverActions.appendChild(actionButton("Copy top 15", (e, btn) => copyToClipboard(buildWaiverText(), btn)));
-  waiverActions.appendChild(actionButton("Open Free Agents ↗", null, { href: sleeperUrl("/players?type=free_agents"), primary: true }));
-  faCard.appendChild(waiverActions);
-  if (!fas.length) {
-    faCard.appendChild(el("div", { class: "empty" }, "No projected free agents this week."));
-  } else {
-    fas.slice(0, 30).forEach(fa => {
-      const repl = bestReplacement(fa);
-      const cell = el("div", {});
-      cell.appendChild(document.createTextNode(fa.name));
-      cell.appendChild(el("span", { class: "pos-chip " + positionClass(fa.position), style: "margin-left:8px" }, fa.position));
-      if (fa.team) cell.appendChild(el("span", { class: "pct", style: "margin-left:6px" }, fa.team));
-      if (fa.opponent) cell.appendChild(el("span", { class: "pct", style: "margin-left:4px" }, "vs " + fa.opponent));
-      if (fa.injury) cell.appendChild(el("span", { class: "auto-grade-chip auto-miss", style: "margin-left:8px" }, fa.injury));
-      if (repl) {
-        cell.appendChild(el("span", { class: "delta-pos", style: "margin-left:8px; font-size:12px" },
-          `+${repl.diff.toFixed(1)} over ${repl.replaced.name}` +
-          (repl.slot ? ` (${repl.slot === "SUPER_FLEX" ? "SF" : repl.slot})` : "")));
-      } else if (fa.ktcValue >= 1000) {
-        cell.appendChild(el("span", { class: "pct", style: "margin-left:8px; font-size:12px" },
-          `KTC stash (val ${fa.ktcValue.toLocaleString()})`));
-      }
-      faCard.appendChild(el("div", { class: "pick-history-row" },
-        el("div", { class: "pick-history-slot" }, ""),
-        cell,
-        el("div", { class: "pick-history-by" }, fa.projected.toFixed(1)),
-      ));
+  filterRow.appendChild(actionButton("Copy", (e, btn) => copyToClipboard(buildWaiverText(), btn)));
+  filterRow.appendChild(actionButton("Open Free Agents ↗", null, { href: sleeperUrl("/players?type=free_agents"), primary: true }));
+  headerCard.appendChild(filterRow);
+  main.appendChild(headerCard);
+
+  if (upgrades.length) {
+    const upCard = el("div", { class: "card" }, el("h2", {}, "Lineup Upgrades"));
+    upgrades.slice(0, 20).forEach(({ fa, upgrade }) => {
+      upCard.appendChild(renderPlayerRow(fa, {
+        bench: true,
+        slotLabel: upgrade.slot === "SUPER_FLEX" ? "SF" : upgrade.slot,
+        upgrade,
+      }));
     });
+    main.appendChild(upCard);
   }
-  main.appendChild(faCard);
+  if (stashes.length) {
+    const stashCard = el("div", { class: "card" }, el("h2", {}, "Stash Candidates"));
+    stashCard.appendChild(el("div", { class: "pct", style: "margin-bottom:8px" },
+      "Players without an immediate lineup upgrade but with strong KTC dynasty value — worth a roster spot if you have one open."));
+    stashes.slice(0, 15).forEach(fa => {
+      stashCard.appendChild(renderPlayerRow(fa, {
+        bench: true,
+        slotLabel: fa.position,
+        stash: fa.ktcValue,
+      }));
+    });
+    main.appendChild(stashCard);
+  }
+  if (lowValue.length) {
+    const otherCard = el("div", { class: "card" }, el("h2", {}, "Other Available"));
+    lowValue.slice(0, 20).forEach(fa => {
+      otherCard.appendChild(renderPlayerRow(fa, { bench: true, slotLabel: fa.position }));
+    });
+    main.appendChild(otherCard);
+  }
+  if (!upgrades.length && !stashes.length && !lowValue.length) {
+    main.appendChild(el("div", { class: "card empty" }, "No free agents match this filter."));
+  }
 
   main.appendChild(el("div", { class: "pct", style: "margin-top:14px" },
-    "Free agents = QB/RB/WR/TE not on any roster, with a non-zero projection for this week. " +
-    "Projection scored with your league's settings. " +
-    "“+X over [player]” means starting this FA over your current optimal lineup adds X points; trade your existing optimal lineup for this if you have a waiver priority high enough. " +
-    "Players without an immediate upgrade but high KTC value are flagged as long-term stash candidates."
+    "Free agents = QB / RB / WR / TE not on any roster. Lineup Upgrades show the projected gain over your current starter. Stash Candidates are players with KTC dynasty value ≥ 1500 but no immediate upgrade."
   ));
 }
 

@@ -1835,18 +1835,23 @@ function classifyAsset(blended, position, age) {
     return Object.assign({ label }, DD_TIER_INFO[label]);
   }
 
+  // NOTE: `blended` is 0.7 * Flock + 0.3 * KTC (or whichever single source is
+  // available). Flock's value range is much higher than KTC's, so cutoffs are
+  // tuned against the blended space — not raw KTC. Verified against current
+  // Henry-roster ground truth (Hampton 8728 = Foundational, Goff 7580 =
+  // Mainstay, LaPorta 6989 = Upside Premier, Strange 5672 = Upside Shot, etc.).
   const band = ageBand(position, age);  // "young" | "prime" | "old"
   let label;
   // Elite tier
-  if (blended >= 8500) {
+  if (blended >= 9000) {
     label = band === "old" ? "Short Term League Winner" : "Cornerstone";
   }
   // High-end starter
-  else if (blended >= 5500) {
+  else if (blended >= 8000) {
     label = band === "old" ? "Short Term League Winner" : "Foundational";
   }
   // Solid starter
-  else if (blended >= 4000) {
+  else if (blended >= 6500) {
     label = band === "young" ? "Upside Premier"
           : band === "prime" ? "Mainstay"
           : "Productive Vet";

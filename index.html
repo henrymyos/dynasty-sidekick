@@ -3053,55 +3053,6 @@ function renderStats() {
   psTable.appendChild(psBody);
   psCard.appendChild(psTable);
 
-  // Per-position best-section summary
-  psCard.appendChild(el("h3", { style: "margin-top:22px" }, "Where to draft each position"));
-  const sumTable = el("table", {},
-    el("thead", {}, el("tr", {},
-      el("th", {}, "Position"),
-      el("th", {}, "Best Section"),
-      el("th", { class: "num tight" }, psMetricLabel),
-      el("th", { class: "num tight" }, "Sample"),
-    )),
-  );
-  const sumBody = el("tbody", {});
-  PS_POSITIONS.forEach(pos => {
-    const sectionsHit = PS_SECTIONS.map(section => {
-      const subset = state.picks.filter(p =>
-        p.round === section.round
-        && tierOfPickInRound(p.pickInRound) === section.tier
-        && p.pos === pos
-      );
-      const t = tally(subset);
-      return { section, t, metric: psMetric(t) };
-    }).filter(s => s.t.total >= MIN_SAMPLE && s.metric !== null);
-    if (!sectionsHit.length) {
-      sumBody.appendChild(el("tr", {},
-        el("td", {},
-          el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
-          pos
-        ),
-        el("td", { class: "pct" }, "not enough data"),
-        el("td", { class: "num tight" }, "—"),
-        el("td", { class: "num tight" }, "—"),
-      ));
-      return;
-    }
-    const best = sectionsHit.reduce((a, b) => (b.metric > a.metric ? b : a));
-    sumBody.appendChild(el("tr", {},
-      el("td", {},
-        el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
-        pos
-      ),
-      el("td", {},
-        best.section.label,
-        el("span", { class: "pct", style: "margin-left:8px" }, best.section.slots)
-      ),
-      el("td", { class: "num tight" }, psMetricFormat(best.t)),
-      el("td", { class: "num tight" }, String(best.t.total)),
-    ));
-  });
-  sumTable.appendChild(sumBody);
-  psCard.appendChild(sumTable);
   psCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
     "Top grid: hit % per position in each section (pick count in parens). " +
     "The best position in each section is highlighted. " +
@@ -3112,7 +3063,7 @@ function renderStats() {
   // ----- Card: Drafter × Position × Tier -----
   main.appendChild(el("div", { class: "section-header" }, "Drafter Behavior",
     el("span", { class: "section-sub" }, "Per-drafter patterns and sequence effects")));
-  const insightCard = el("div", { class: "card" }, el("h2", {}, "Drafter Insight: Position × Round"));
+  const insightCard = el("div", { class: "card" }, el("h2", {}, "Drafter Insight: Position × Round × Tier"));
   const insightControls = el("div", { class: "controls" });
   const drafterOpts = state.people.map(p => ({ value: p, label: p }));
   if (state.statsInsightDrafter == null && drafterOpts.length) state.statsInsightDrafter = drafterOpts[0].value;
@@ -3153,21 +3104,41 @@ function renderStats() {
     ["QB", "RB", "WR", "TE"].forEach(pos => {
       const posPicks = drafterPicks.filter(p => p.pos === pos);
       if (!posPicks.length) return;
-      itbody.appendChild(el("tr", {},
+      // Bold "Position — Total" header row
+      itbody.appendChild(el("tr", { class: "pos-total" },
         el("td", {},
           el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
-          pos
+          pos + " — Total"
         ),
         cellFor(posPicks.filter(p => p.round === 1)),
         cellFor(posPicks.filter(p => p.round === 2)),
         cellFor(posPicks.filter(p => p.round === 3)),
         cellForGap(posPicks),
       ));
+      // For each round, nest Early / Mid / Late sub-rows underneath.
+      [1, 2, 3].forEach(rd => {
+        const roundPicks = posPicks.filter(p => p.round === rd);
+        if (!roundPicks.length) return;
+        ["Early", "Mid", "Late"].forEach(tier => {
+          const tierPicks = roundPicks.filter(p => tierOfPickInRound(p.pickInRound) === tier);
+          if (!tierPicks.length) return;
+          const slotRange = tier === "Early" ? "1-4" : tier === "Mid" ? "5-8" : "9-12";
+          // Cells: this tier slot only fills under its own round column; the
+          // other two round columns get a dash so the grid still reads cleanly.
+          itbody.appendChild(el("tr", { class: "pos-tier" },
+            el("td", {}, `R${rd} ${tier} (${rd}.${slotRange})`),
+            rd === 1 ? cellFor(tierPicks) : el("td", { class: "num tight" }, "—"),
+            rd === 2 ? cellFor(tierPicks) : el("td", { class: "num tight" }, "—"),
+            rd === 3 ? cellFor(tierPicks) : el("td", { class: "num tight" }, "—"),
+            cellForGap(tierPicks),
+          ));
+        });
+      });
     });
     itable.appendChild(itbody);
     insightCard.appendChild(itable);
     insightCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
-      "Hit % per cell, pick count in parens. Each column is one round (R1/R2/R3); the last column is the drafter's all-round total at that position."
+      "Hit % per cell, pick count in parens. Bold rows show this drafter's total per round at each position; the indented sub-rows split each round into Early (.01–.04), Mid (.05–.08), and Late (.09–.12). The last column is the drafter's all-round total at that position."
     ));
   }
   main.appendChild(insightCard);
@@ -3177,20 +3148,29 @@ function renderStats() {
   const overall = tally(state.picks.filter(p => p.round));
   const overallHit = overall.graded ? overall.hit / overall.graded : 0;
   const overallHM = overall.graded ? (overall.hit + overall.meh) / overall.graded : 0;
+  // Composite score weights Hit % at 0.7 and (Hit + Meh) % at 0.3, so straight
+  // hits drive the rating but a year with extra Mehs still gets some credit.
+  const HIT_WEIGHT = 0.7, HM_WEIGHT = 0.3;
+  function strengthScore(hp, hmp) { return HIT_WEIGHT * hp + HM_WEIGHT * hmp; }
+  const overallScore = strengthScore(overallHit, overallHM);
   // Compute strongest and weakest years for lede
   const yearStats = state.years
     .map(y => {
       const t = tally(state.picks.filter(p => p.year === y && p.round));
-      return { y, t, hp: t.graded ? t.hit / t.graded : 0 };
+      const hp = t.graded ? t.hit / t.graded : 0;
+      const hmp = t.graded ? (t.hit + t.meh) / t.graded : 0;
+      return { y, t, hp, hmp, score: strengthScore(hp, hmp) };
     })
     .filter(r => r.t.graded > 0);
   if (yearStats.length >= 2) {
-    const sorted = yearStats.slice().sort((a, b) => b.hp - a.hp);
+    const sorted = yearStats.slice().sort((a, b) => b.score - a.score);
     const best = sorted[0], worst = sorted[sorted.length - 1];
     const lede = el("div", { class: "card-lede" });
     lede.innerHTML = `<strong>${best.y}</strong> was the strongest class ` +
-      `(${(best.hp * 100).toFixed(1)}% hit). <strong>${worst.y}</strong> was the weakest ` +
-      `(${(worst.hp * 100).toFixed(1)}%). League average: ${(overallHit * 100).toFixed(1)}%.`;
+      `(${(best.hp * 100).toFixed(1)}% hit, ${(best.hmp * 100).toFixed(1)}% hit+meh). ` +
+      `<strong>${worst.y}</strong> was the weakest ` +
+      `(${(worst.hp * 100).toFixed(1)}% / ${(worst.hmp * 100).toFixed(1)}%). ` +
+      `League average: ${(overallHit * 100).toFixed(1)}% / ${(overallHM * 100).toFixed(1)}%.`;
     ysCard.appendChild(lede);
   }
   const ysTable = el("table", {},
@@ -3199,7 +3179,7 @@ function renderStats() {
       el("th", { class: "num" }, "Picks"),
       el("th", { class: "num tight" }, "Hit %"),
       el("th", { class: "num tight" }, "Hit + Meh"),
-      el("th", { class: "num tight gap-left" }, "Δ vs Avg"),
+      el("th", { class: "num tight gap-left" }, "Δ Score"),
       el("th", {}, ""),
     )),
   );
@@ -3209,7 +3189,9 @@ function renderStats() {
     const t = tally(yp);
     if (!t.graded) return;
     const hp = t.hit / t.graded;
-    const delta = hp - overallHit;
+    const hmp = (t.hit + t.meh) / t.graded;
+    const score = strengthScore(hp, hmp);
+    const delta = score - overallScore;
     const label = delta >= 0.05 ? "Strong" : delta <= -0.05 ? "Weak" : "Average";
     const pillClass = delta >= 0.05 ? "pill pill-strong" : delta <= -0.05 ? "pill pill-weak" : "pill pill-avg";
     ysBody.appendChild(el("tr", {},
@@ -3234,6 +3216,9 @@ function renderStats() {
   ));
   ysTable.appendChild(ysBody);
   ysCard.appendChild(ysTable);
+  ysCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
+    "Δ Score = (0.7 × Hit % + 0.3 × Hit + Meh %) − league average. Years above +5% earn the Strong pill; below −5% earn Weak. Hit % dominates the score but a year with extra Mehs still gets some credit."
+  ));
   main.appendChild(ysCard);
 
 

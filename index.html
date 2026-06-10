@@ -530,6 +530,37 @@
     letter-spacing: 0.3px;
   }
   .pill-strong { background: rgba(46,160,67,0.18); color: var(--hit); }
+  .action-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .action-btn {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .action-btn:hover { background: var(--border); border-color: var(--accent); }
+  .action-btn.primary {
+    background: rgba(88,166,255,0.15);
+    border-color: rgba(88,166,255,0.5);
+    color: var(--accent);
+  }
+  .action-btn.primary:hover { background: rgba(88,166,255,0.25); }
+  .action-btn.copied { background: rgba(46,160,67,0.18); border-color: rgba(46,160,67,0.5); color: var(--hit); }
+  .trade-block .action-row { margin-top: 8px; margin-bottom: 0; }
   .pill-weak { background: rgba(248,81,73,0.15); color: var(--miss); }
   .pill-avg { background: var(--panel-2); color: var(--muted); }
 
@@ -2137,6 +2168,20 @@ function renderRosters() {
       if (t.myFits.length) fitBits.push("You fill: " + t.myFits.join(", "));
       if (t.theirFits.length) fitBits.push(t.partnerName + " fills: " + t.theirFits.join(", "));
       block.appendChild(el("div", { class: "pct", style: "margin-top:6px" }, fitBits.join("  ·  ")));
+
+      // Per-trade action row: copy + open Sleeper trade page.
+      function tradeText() {
+        const sendList = t.gives.map(a => `  - ${a.name} (${a.position})`).join("\n");
+        const recvList = t.gets.map(a => `  - ${a.name} (${a.position})`).join("\n");
+        return `Proposed trade with ${t.partnerName} (${partnerType})\n` +
+          `${selectedName} sends:\n${sendList}\n${selectedName} receives:\n${recvList}\n` +
+          `${Math.round(t.fairness * 100)}% fair (KTC + Flock)`;
+      }
+      const tradeActions = el("div", { class: "action-row" });
+      tradeActions.appendChild(actionButton("Copy trade", (e, btn) => copyToClipboard(tradeText(), btn)));
+      tradeActions.appendChild(actionButton("Open trade page ↗", null, { href: sleeperUrl("/team"), primary: true }));
+      block.appendChild(tradeActions);
+
       tradeCard.appendChild(block);
     });
   }
@@ -2256,6 +2301,21 @@ function renderLineup() {
   // ----- Starters card -----
   const startersCard = el("div", { class: "card" }, el("h2", {}, "Optimal Lineup"));
   startersCard.appendChild(header);
+
+  // Action row: copy lineup text + open the team page in Sleeper.
+  function buildLineupText() {
+    const lines = [`${selectedName} — Week ${week} Optimal Lineup (proj ${projectedTotal.toFixed(1)})`];
+    lineup.forEach(({ slot, player }) => {
+      const slotLabel = slot === "SUPER_FLEX" ? "SF" : slot;
+      if (!player) lines.push(`  ${slotLabel}: (no eligible player)`);
+      else lines.push(`  ${slotLabel}: ${player.name} (${player.position}${player.team ? " " + player.team : ""})  ${player.projected.toFixed(1)}`);
+    });
+    return lines.join("\n");
+  }
+  const startersActions = el("div", { class: "action-row" });
+  startersActions.appendChild(actionButton("Copy lineup", (e, btn) => copyToClipboard(buildLineupText(), btn)));
+  startersActions.appendChild(actionButton("Open in Sleeper ↗", null, { href: sleeperUrl("/team"), primary: true }));
+  startersCard.appendChild(startersActions);
   lineup.forEach(({ slot, player }) => {
     const slotLabel = slot === "SUPER_FLEX" ? "SF" : slot;
     if (!player) {
@@ -2439,6 +2499,19 @@ function renderWaivers() {
   // ----- Top FAs card -----
   const faCard = el("div", { class: "card" }, el("h2", {}, "Top Free Agents"));
   faCard.appendChild(lede);
+  function buildWaiverText() {
+    const lines = [`${selectedName} — Week ${week} Free Agent Adds (ranked)`];
+    fas.slice(0, 15).forEach((fa, i) => {
+      const repl = bestReplacement(fa);
+      const note = repl ? `  +${repl.diff.toFixed(1)} over ${repl.replaced.name}` : "";
+      lines.push(`  ${i + 1}. ${fa.name} (${fa.position}${fa.team ? " " + fa.team : ""})  proj ${fa.projected.toFixed(1)}${note}`);
+    });
+    return lines.join("\n");
+  }
+  const waiverActions = el("div", { class: "action-row" });
+  waiverActions.appendChild(actionButton("Copy top 15", (e, btn) => copyToClipboard(buildWaiverText(), btn)));
+  waiverActions.appendChild(actionButton("Open Free Agents ↗", null, { href: sleeperUrl("/players?type=free_agents"), primary: true }));
+  faCard.appendChild(waiverActions);
   if (!fas.length) {
     faCard.appendChild(el("div", { class: "empty" }, "No projected free agents this week."));
   } else {
@@ -3218,6 +3291,60 @@ async function loadLineupData() {
 }
 function ensureLineupDataLoaded() {
   if (!state.lineupData && !state.lineupDataLoading && !state.lineupDataError) loadLineupData();
+}
+
+const LEAGUE_ID_SP = "1312076332460425216";
+function sleeperUrl(path) {
+  return "https://sleeper.com/leagues/" + LEAGUE_ID_SP + (path || "");
+}
+
+// Copy text to clipboard with graceful fallback; briefly flash the source button.
+function copyToClipboard(text, srcBtn) {
+  function flash() {
+    if (!srcBtn) return;
+    const originalText = srcBtn.dataset.label || srcBtn.textContent;
+    srcBtn.dataset.label = originalText;
+    srcBtn.textContent = "Copied!";
+    srcBtn.classList.add("copied");
+    setTimeout(() => {
+      srcBtn.textContent = originalText;
+      srcBtn.classList.remove("copied");
+    }, 1500);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(flash).catch(() => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); flash(); } catch {}
+      document.body.removeChild(ta);
+    });
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); flash(); } catch {}
+    document.body.removeChild(ta);
+  }
+}
+
+// Small action button factory.
+function actionButton(label, onClick, opts) {
+  opts = opts || {};
+  const tag = opts.href ? "a" : "button";
+  const props = { class: "action-btn" + (opts.primary ? " primary" : "") };
+  if (opts.href) {
+    props.href = opts.href;
+    props.target = "_blank";
+    props.rel = "noopener";
+  } else if (tag === "button") {
+    props.type = "button";
+  }
+  const btn = el(tag, props, label);
+  if (onClick) btn.addEventListener("click", e => onClick(e, btn));
+  return btn;
 }
 
 // Apply your league's scoring_settings to a Sleeper raw stat object.

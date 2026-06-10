@@ -936,8 +936,8 @@
   <div class="header-row">
     <h1>🏈 Draft Picks Tracker</h1>
     <div class="ws-switch" id="wsSwitch">
-      <button class="ws-btn" data-ws="stats">Stats</button>
-      <button class="ws-btn" data-ws="draft">Live Draft</button>
+      <button class="ws-btn" data-ws="drafts">Rookie Drafts</button>
+      <button class="ws-btn" data-ws="team">My Team</button>
     </div>
     <div class="status">
       <span class="status-dot" id="statusDot"></span>
@@ -945,15 +945,7 @@
       <button class="refresh" id="refreshBtn">Refresh</button>
     </div>
   </div>
-  <nav class="tabs" id="statsTabs">
-    <button data-view="overview" class="active">Overview</button>
-    <button data-view="leaderboard">Drafters</button>
-    <button data-view="teams">Teams</button>
-    <button data-view="lineup">Lineup</button>
-    <button data-view="waivers">Waivers</button>
-    <button data-view="stats">Stats</button>
-    <button data-view="trades">Trades</button>
-  </nav>
+  <nav class="tabs" id="tabsNav"></nav>
 </header>
 <main id="main">
   <div class="empty">Loading draft data…</div>
@@ -998,7 +990,15 @@ const LS_DRAFT_USER = "dp.draftUserId.v1";
 const LS_DRAFT_MODE = "dp.draftMode.v1";
 
 let state = {
-  workspace: (() => { try { return localStorage.getItem(LS_WORKSPACE) || "stats"; } catch { return "stats"; } })(),
+  workspace: (() => {
+    try {
+      const saved = localStorage.getItem(LS_WORKSPACE);
+      // Migrate old workspace ids: "stats" → "drafts", "draft" → "team".
+      if (saved === "stats") return "drafts";
+      if (saved === "draft") return "team";
+      return saved || "drafts";
+    } catch { return "drafts"; }
+  })(),
   draft: {
     data: null,
     ktcLive: null,
@@ -3416,6 +3416,11 @@ async function loadSleeper(force = false) {
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     state.sleeper = data;
+    // Default the My Team picker to Henry once Sleeper data is in.
+    if (state.workspace === "team" && state.rosterTeam == null) {
+      const henryId = findUserIdByCanonicalName("Henry");
+      if (henryId) state.rosterTeam = henryId;
+    }
   } catch (e) {
     state.sleeperError = e.message;
   } finally {
@@ -4069,14 +4074,14 @@ async function loadDraftLive() {
     state.draft.error = e.message;
   } finally {
     state.draft.loading = false;
-    if (state.workspace === "draft") render();
+    if (state.workspace === "team" && state.view === "liveDraft") render();
   }
 }
 
 function startDraftPolling() {
   if (state.draft.pollTimer) return;
   state.draft.pollTimer = setInterval(() => {
-    if (state.workspace === "draft") loadDraftLive();
+    if (state.workspace === "team" && state.view === "liveDraft") loadDraftLive();
   }, 15_000);
 }
 function stopDraftPolling() {
@@ -4096,17 +4101,77 @@ function ktcNorm(s) {
     .trim();
 }
 
+// Tabs are workspace-aware: each workspace has its own list.
+const WORKSPACE_TABS = {
+  drafts: [
+    { view: "overview", label: "Overview" },
+    { view: "leaderboard", label: "Drafters" },
+    { view: "stats", label: "Stats" },
+    { view: "trades", label: "Trades" },
+  ],
+  team: [
+    { view: "liveDraft", label: "Live Draft" },
+    { view: "teams", label: "Teams" },
+    { view: "lineup", label: "Lineup" },
+    { view: "waivers", label: "Waivers" },
+  ],
+};
+
+function findUserIdByCanonicalName(name) {
+  if (!state.sleeper || !state.sleeper.seasons || !state.sleeper.seasons.length) return null;
+  const latest = state.sleeper.seasons[state.sleeper.seasons.length - 1];
+  for (const u of latest.users) {
+    if (canonicalOwnerName(userDisplay(u)) === name) return u.user_id;
+  }
+  return null;
+}
+
+function rebuildTabsNav() {
+  const nav = document.getElementById("tabsNav");
+  if (!nav) return;
+  nav.innerHTML = "";
+  const tabs = WORKSPACE_TABS[state.workspace] || [];
+  tabs.forEach(t => {
+    const btn = el("button", {
+      "data-view": t.view,
+      class: state.view === t.view ? "active" : "",
+    }, t.label);
+    btn.addEventListener("click", () => {
+      state.view = t.view;
+      rebuildTabsNav();
+      render();
+    });
+    nav.appendChild(btn);
+  });
+}
+
 function setWorkspace(ws) {
   state.workspace = ws;
   try { localStorage.setItem(LS_WORKSPACE, ws); } catch {}
   document.querySelectorAll(".ws-btn").forEach(b => b.classList.toggle("active", b.dataset.ws === ws));
-  document.getElementById("statsTabs").style.display = ws === "stats" ? "" : "none";
-  if (ws === "draft") {
+
+  // Snap state.view to a tab that exists in the new workspace.
+  const tabs = WORKSPACE_TABS[ws] || [];
+  const validViews = new Set(tabs.map(t => t.view));
+  if (!validViews.has(state.view)) {
+    state.view = tabs.length ? tabs[0].view : null;
+  }
+
+  // Live-draft polling only runs while the Live Draft tab is open.
+  if (ws === "team" && state.view === "liveDraft") {
     if (!state.draft.data) loadDraftLive();
     startDraftPolling();
   } else {
     stopDraftPolling();
   }
+
+  // Default to Henry on first entry to My Team workspace.
+  if (ws === "team" && state.rosterTeam == null) {
+    const henryId = findUserIdByCanonicalName("Henry");
+    if (henryId) state.rosterTeam = henryId;
+  }
+
+  rebuildTabsNav();
   render();
 }
 
@@ -4572,31 +4637,45 @@ function renderDraftWorkspace() {
 }
 
 function setActiveTab(view) {
-  document.querySelectorAll("nav.tabs button").forEach(b => {
-    b.classList.toggle("active", b.dataset.view === view);
-  });
+  // The tabs nav is dynamic; just rebuild it so the active state reflects state.view.
+  rebuildTabsNav();
 }
 
 function render() {
-  if (state.workspace === "draft") {
+  // Live draft polling toggles with the tab.
+  if (state.workspace === "team" && state.view === "liveDraft") {
+    if (!state.draft.data && !state.draft.loading) loadDraftLive();
+    startDraftPolling();
+  } else {
+    stopDraftPolling();
+  }
+
+  if (state.workspace === "team" && state.view === "liveDraft") {
     renderDraftWorkspace();
     return;
   }
-  if (!state.picks.length) {
+
+  // Drafts workspace requires sheet picks; team-workspace tabs don't.
+  if (state.workspace === "drafts" && !state.picks.length) {
     document.getElementById("main").innerHTML = '<div class="empty">No draft data available.</div>';
     return;
   }
+
   switch (state.view) {
+    // Drafts workspace
     case "year": renderYearView(); break;
     case "person": renderPersonView(); break;
     case "leaderboard": renderLeaderboard(); break;
-    case "rankings": renderRankings(); break;
-    case "rosters": renderRosters(); break;
+    case "stats": renderStats(); break;
+    case "trades": renderTrades(); break;
+    case "overview": renderOverview(); break;
+    // Team workspace
     case "teams": renderTeams(); break;
     case "lineup": renderLineup(); break;
     case "waivers": renderWaivers(); break;
-    case "stats": renderStats(); break;
-    case "trades": renderTrades(); break;
+    // Drilldowns reachable from Drafters / Teams
+    case "rankings": renderRankings(); break;
+    case "rosters": renderRosters(); break;
     default: renderOverview();
   }
 }
@@ -4631,18 +4710,11 @@ async function loadData() {
   }
 }
 
-document.querySelectorAll("nav.tabs button").forEach(b => {
-  b.addEventListener("click", () => {
-    state.view = b.dataset.view;
-    setActiveTab(state.view);
-    render();
-  });
-});
 document.querySelectorAll(".ws-btn").forEach(b => {
   b.addEventListener("click", () => setWorkspace(b.dataset.ws));
 });
 document.getElementById("refreshBtn").addEventListener("click", () => {
-  if (state.workspace === "draft") loadDraftLive();
+  if (state.workspace === "team" && state.view === "liveDraft") loadDraftLive();
   else loadData();
 });
 

@@ -819,6 +819,21 @@
     letter-spacing: 0.3px;
   }
   .auto-big-hit { background: rgba(46,160,67,0.30); color: #74e08c; }
+  /* Dynasty Domain 12-tier color ladder. Elite tiers cool greens, mid blues,
+     low yellows, bottom reds/grays. Each chip carries its own background so
+     they're visually distinct at a glance. */
+  .dd-cornerstone        { background: rgba(46,160,67,0.40);  color: #74e08c; }
+  .dd-foundational       { background: rgba(46,160,67,0.22);  color: #74e08c; }
+  .dd-upside-premier     { background: rgba(88,166,255,0.22); color: #79b8ff; }
+  .dd-mainstay           { background: rgba(88,166,255,0.14); color: #79b8ff; }
+  .dd-productive-vet     { background: rgba(165,142,238,0.20); color: #b39ef0; }
+  .dd-short-lw           { background: rgba(165,142,238,0.12); color: #b39ef0; }
+  .dd-upside-shot        { background: rgba(210,153,34,0.22); color: var(--meh); }
+  .dd-short-prod         { background: rgba(210,153,34,0.14); color: var(--meh); }
+  .dd-serviceable        { background: rgba(110,118,129,0.20); color: var(--muted); }
+  .dd-jag-insurance      { background: rgba(248,81,73,0.15);  color: #f08585; }
+  .dd-jag-developmental  { background: rgba(248,81,73,0.10);  color: #f08585; }
+  .dd-replaceable        { background: rgba(110,118,129,0.14); color: var(--muted); }
   .auto-hit { background: rgba(46,160,67,0.15); color: var(--hit); }
   .auto-meh { background: rgba(210,153,34,0.15); color: var(--meh); }
   .auto-miss { background: rgba(248,81,73,0.15); color: var(--miss); }
@@ -1781,25 +1796,86 @@ const POSITION_AGE_CURVE = {
   RB: { rising: 23, cliff: 26 },   // RBs age fastest
 };
 
+// Dynasty Domain-style 12-tier categorization. Derived from KTC blended value
+// crossed with the player's age band (young / prime / old) on the position
+// curve. Computed live every render so values update as the KTC scrape
+// refreshes (~hourly). Picks classified by value alone.
+const DD_TIER_INFO = {
+  "Cornerstone":              { chip: "dd-cornerstone",     short: "Cstn" },
+  "Foundational":             { chip: "dd-foundational",    short: "Fdn" },
+  "Upside Premier":           { chip: "dd-upside-premier",  short: "Up+ Prem" },
+  "Mainstay":                 { chip: "dd-mainstay",        short: "Mnsty" },
+  "Productive Vet":           { chip: "dd-productive-vet",  short: "Prod Vet" },
+  "Short Term League Winner": { chip: "dd-short-lw",        short: "ST LW" },
+  "Upside Shot":              { chip: "dd-upside-shot",     short: "Up Shot" },
+  "Short Term Production":    { chip: "dd-short-prod",      short: "ST Prod" },
+  "Serviceable":              { chip: "dd-serviceable",     short: "Servic" },
+  "Jag - Insurance":          { chip: "dd-jag-insurance",   short: "Jag-Ins" },
+  "Jag - Developmental":      { chip: "dd-jag-developmental", short: "Jag-Dev" },
+  "Replaceable":              { chip: "dd-replaceable",     short: "Repl" },
+};
+
+function ageBand(position, age) {
+  if (age == null) return "prime";
+  const curve = POSITION_AGE_CURVE[position] || POSITION_AGE_CURVE.WR;
+  if (age <= curve.rising) return "young";
+  if (age >= curve.cliff) return "old";
+  return "prime";
+}
+
 function classifyAsset(blended, position, age) {
   if (blended == null) blended = 0;
-  // Picks have no age — classify by value only.
+  // Picks: value only. Highest tier picks land Foundational, next Mainstay,
+  // then Upside Shot for mid picks, then Replaceable for the dregs.
   if (position === "PICK") {
-    if (blended >= 5000) return { label: "Cornerstone", chip: "auto-big-hit" };
-    if (blended >= 2500) return { label: "Tradeable", chip: "auto-meh" };
-    if (blended >= 1000) return { label: "Wait & See", chip: "auto-hit" };
-    return { label: "Droppable", chip: "auto-miss" };
+    let label;
+    if (blended >= 5500) label = "Foundational";
+    else if (blended >= 3500) label = "Mainstay";
+    else if (blended >= 1800) label = "Upside Shot";
+    else label = "Replaceable";
+    return Object.assign({ label }, DD_TIER_INFO[label]);
   }
-  if (blended >= 7500) return { label: "Cornerstone", chip: "auto-big-hit" };
-  if (blended < 1500) return { label: "Droppable", chip: "auto-miss" };
-  // Middle bands split by age vs position curve.
-  const curve = POSITION_AGE_CURVE[position] || POSITION_AGE_CURVE.WR;
-  const cliffAge = age != null && age >= curve.cliff;
-  const risingAge = age != null && age <= curve.rising;
-  if (cliffAge) return { label: "Tradeable", chip: "auto-meh" };
-  if (risingAge) return { label: "Wait & See", chip: "auto-hit" };
-  // In-prime middle: default to Tradeable since they're at peak value to sell.
-  return { label: "Tradeable", chip: "auto-meh" };
+
+  const band = ageBand(position, age);  // "young" | "prime" | "old"
+  let label;
+  // Elite tier (top of KTC superflex)
+  if (blended >= 8500) {
+    label = band === "old" ? "Productive Vet" : "Cornerstone";
+  }
+  // High value, established / future workhorse
+  else if (blended >= 6500) {
+    label = band === "young" ? "Foundational"
+          : band === "prime" ? "Foundational"
+          : "Productive Vet";
+  }
+  // Strong starter band
+  else if (blended >= 4500) {
+    label = band === "young" ? "Upside Premier"
+          : band === "prime" ? "Mainstay"
+          : "Productive Vet";
+  }
+  // Mid value: real fantasy bodies, varied by age
+  else if (blended >= 2500) {
+    label = band === "young" ? "Upside Premier"
+          : band === "prime" ? "Mainstay"
+          : "Short Term League Winner";
+  }
+  // Low-mid: bench / spot-starter
+  else if (blended >= 1500) {
+    label = band === "young" ? "Upside Shot"
+          : band === "prime" ? "Short Term Production"
+          : "Short Term Production";
+  }
+  // Low: deep bench
+  else if (blended >= 800) {
+    label = band === "old" ? "Jag - Insurance" : "Serviceable";
+  }
+  // Bottom
+  else {
+    if (band === "young") label = "Jag - Developmental";
+    else label = "Replaceable";
+  }
+  return Object.assign({ label }, DD_TIER_INFO[label]);
 }
 
 function renderRosters() {
@@ -1991,11 +2067,23 @@ function renderRosters() {
 
   // ===== Roster card =====
   const rosterCard = el("div", { class: "card" }, el("h2", {}, selectedName + " — Roster"));
-  const TIER_ORDER = ["Cornerstone", "Tradeable", "Wait & See", "Droppable"];
-  const counts = { Cornerstone: 0, Tradeable: 0, "Wait & See": 0, Droppable: 0 };
-  myAssets.forEach(a => { counts[a.tier.label]++; });
+  const TIER_ORDER = [
+    "Cornerstone", "Foundational", "Upside Premier", "Mainstay",
+    "Productive Vet", "Short Term League Winner",
+    "Upside Shot", "Short Term Production", "Serviceable",
+    "Jag - Insurance", "Jag - Developmental", "Replaceable",
+  ];
+  const counts = {};
+  TIER_ORDER.forEach(t => { counts[t] = 0; });
+  myAssets.forEach(a => { if (a.tier && counts[a.tier.label] != null) counts[a.tier.label]++; });
+  // Lede summarizes the top tiers and the bottom tiers so the wall of 12 isn't overwhelming.
+  const topCount = ["Cornerstone","Foundational","Upside Premier","Mainstay"].reduce((s,t)=>s+counts[t],0);
+  const midCount = ["Productive Vet","Short Term League Winner","Upside Shot","Short Term Production"].reduce((s,t)=>s+counts[t],0);
+  const lowCount = ["Serviceable","Jag - Insurance","Jag - Developmental","Replaceable"].reduce((s,t)=>s+counts[t],0);
   const lede = el("div", { class: "card-lede" });
-  lede.innerHTML = TIER_ORDER.map(t => `<strong>${counts[t]}</strong> ${t}`).join("  ·  ");
+  lede.innerHTML = `<strong>${topCount}</strong> elite / foundational  ·  ` +
+    `<strong>${midCount}</strong> producers / upside  ·  ` +
+    `<strong>${lowCount}</strong> bench / jag`;
   rosterCard.appendChild(lede);
   TIER_ORDER.forEach(tier => {
     const tierAssets = myAssets.filter(a => a.tier.label === tier).sort((a, b) => b.value - a.value);
@@ -2022,9 +2110,9 @@ function renderRosters() {
   const tradeCard = el("div", { class: "card" }, el("h2", {}, "Suggested Trades"));
 
   function movablePool(assets) {
-    return assets.filter(a =>
-      a.tier.label !== "Droppable" && a.value >= 800
-    );
+    // Exclude the bottom tiers — those don't move in trades at any meaningful rate.
+    const BOTTOM = new Set(["Replaceable", "Jag - Developmental", "Jag - Insurance"]);
+    return assets.filter(a => !BOTTOM.has(a.tier.label) && a.value >= 800);
   }
   function rosterImpact(rosterId, gives, gets, needSet) {
     const before = { ...valueByPosByRoster[rosterId] };

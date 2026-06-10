@@ -764,6 +764,8 @@
     <button data-view="overview" class="active">Overview</button>
     <button data-view="leaderboard">Drafters</button>
     <button data-view="teams">Teams</button>
+    <button data-view="lineup">Lineup</button>
+    <button data-view="waivers">Waivers</button>
     <button data-view="stats">Stats</button>
     <button data-view="trades">Trades</button>
   </nav>
@@ -843,6 +845,9 @@ let state = {
   ktcDynasty: null,            // current KTC superflex dynasty values (shared)
   ktcDynastyLoading: false,
   ktcDynastyError: null,
+  lineupData: null,            // weekly projections + league settings
+  lineupDataLoading: false,
+  lineupDataError: null,
   leaderboardRound: null,
   statsRound: null,
   statsInsightDrafter: null,
@@ -2152,6 +2157,324 @@ function renderRosters() {
   main.appendChild(tradeCard);
 }
 
+// Shared: standard fantasy starting slots (1 QB, 2 RB, 3 WR, 1 TE, 1 FLEX, 1 SF).
+// roster_positions in the league config tells us exactly what to fill.
+function fillOptimalLineup(rosterPositions, candidates) {
+  const flexEligible = ["RB", "WR", "TE"];
+  const sfEligible = ["QB", "RB", "WR", "TE"];
+  const used = new Set();
+  const lineup = [];
+  for (const slot of rosterPositions) {
+    if (slot === "BN" || slot === "TAXI" || slot === "IR" || slot === "RES" || slot === "BE") continue;
+    let pool;
+    if (slot === "FLEX") pool = candidates.filter(c => flexEligible.includes(c.position));
+    else if (slot === "SUPER_FLEX" || slot === "SF") pool = candidates.filter(c => sfEligible.includes(c.position));
+    else pool = candidates.filter(c => c.position === slot);
+    const available = pool.filter(c => !used.has(c.id)).sort((a, b) => b.projected - a.projected);
+    const pick = available[0] || null;
+    if (pick) used.add(pick.id);
+    lineup.push({ slot, player: pick });
+  }
+  return lineup;
+}
+
+function teamPickerControls(latestSeason) {
+  const users = latestSeason.users.slice().sort((a, b) =>
+    canonicalOwnerName(userDisplay(a)).localeCompare(canonicalOwnerName(userDisplay(b)))
+  );
+  if (state.rosterTeam == null && users.length) state.rosterTeam = users[0].user_id;
+  const opts = users.map(u => ({ value: u.user_id, label: canonicalOwnerName(userDisplay(u)) }));
+  const controls = el("div", { class: "controls" });
+  controls.appendChild(customSelect(opts, state.rosterTeam, v => {
+    state.rosterTeam = v;
+    render();
+  }));
+  return { controls, users };
+}
+
+function renderLineup() {
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  ensureSleeperLoaded();
+  ensureLineupDataLoaded();
+
+  if (!state.sleeper) {
+    main.appendChild(el("div", { class: "empty" },
+      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
+    return;
+  }
+  if (!state.lineupData) {
+    main.appendChild(el("div", { class: "empty" },
+      state.lineupDataError ? "Lineup error: " + state.lineupDataError : "Loading weekly projections…"));
+    return;
+  }
+
+  const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
+  const { controls, users } = teamPickerControls(latestSeason);
+  main.appendChild(controls);
+
+  const selectedUser = users.find(u => u.user_id === state.rosterTeam);
+  const selectedRoster = latestSeason.rosters.find(r => r.owner_id === state.rosterTeam);
+  if (!selectedRoster) {
+    main.appendChild(el("div", { class: "empty" }, "Roster not found."));
+    return;
+  }
+  const selectedName = canonicalOwnerName(userDisplay(selectedUser));
+
+  const { week, season, projections, league } = state.lineupData;
+  const scoring = league.scoring_settings || {};
+  const rosterPositions = league.roster_positions || [];
+
+  // Enrich every player on the roster with projected points.
+  const candidates = (selectedRoster.players || []).map(pid => {
+    const p = state.sleeper.players[pid];
+    if (!p) return null;
+    const proj = projections[pid];
+    const projected = proj ? scoreProjection(proj.stats, scoring) : 0;
+    return {
+      id: pid,
+      name: p.name,
+      position: p.position,
+      team: proj ? proj.team : p.team,
+      projected,
+      opponent: proj ? proj.opponent : null,
+      injury: proj ? proj.injury_status : null,
+    };
+  }).filter(Boolean);
+
+  const lineup = fillOptimalLineup(rosterPositions, candidates);
+  const startedIds = new Set(lineup.filter(s => s.player).map(s => s.player.id));
+  const projectedTotal = lineup.reduce((s, l) => s + (l.player ? l.player.projected : 0), 0);
+  const offSeason = state.lineupData.season_type === "off" || projectedTotal < 1;
+
+  // Header / total
+  const header = el("div", { class: "card-lede" });
+  header.innerHTML = `<strong>${selectedName}</strong> · ${season} week ${week} · ` +
+    `projected total <strong>${projectedTotal.toFixed(1)}</strong> pts` +
+    (offSeason ? " <span style='color:var(--meh)'>(off-season — projections may be sparse)</span>" : "");
+
+  // ----- Starters card -----
+  const startersCard = el("div", { class: "card" }, el("h2", {}, "Optimal Lineup"));
+  startersCard.appendChild(header);
+  lineup.forEach(({ slot, player }) => {
+    const slotLabel = slot === "SUPER_FLEX" ? "SF" : slot;
+    if (!player) {
+      startersCard.appendChild(el("div", { class: "pick-history-row" },
+        el("div", { class: "pick-history-slot" }, slotLabel),
+        el("div", {}, el("span", { class: "pct" }, "no eligible player")),
+        el("div", { class: "pick-history-by" }, "—"),
+      ));
+      return;
+    }
+    const playerCell = el("div", {});
+    playerCell.appendChild(document.createTextNode(player.name));
+    playerCell.appendChild(el("span", { class: "pos-chip " + positionClass(player.position), style: "margin-left:8px" }, player.position));
+    if (player.team) playerCell.appendChild(el("span", { class: "pct", style: "margin-left:6px" }, player.team));
+    if (player.opponent) playerCell.appendChild(el("span", { class: "pct", style: "margin-left:4px" }, "vs " + player.opponent));
+    if (player.injury) playerCell.appendChild(el("span", { class: "auto-grade-chip auto-miss", style: "margin-left:8px" }, player.injury));
+    startersCard.appendChild(el("div", { class: "pick-history-row" },
+      el("div", { class: "pick-history-slot" }, slotLabel),
+      playerCell,
+      el("div", { class: "pick-history-by" }, player.projected.toFixed(1)),
+    ));
+  });
+  main.appendChild(startersCard);
+
+  // ----- Bench card (everyone else, sorted by projection) -----
+  const benchCard = el("div", { class: "card" }, el("h2", {}, "Bench / Alternatives"));
+  const bench = candidates.filter(c => !startedIds.has(c.id))
+    .sort((a, b) => b.projected - a.projected);
+  if (!bench.length) {
+    benchCard.appendChild(el("div", { class: "empty" }, "Bench is empty."));
+  } else {
+    // For each bench player, find what they'd replace and whether it would help.
+    bench.forEach(b => {
+      const eligibleSlots = lineup.filter(s => {
+        if (!s.player) return s.slot === b.position
+          || (s.slot === "FLEX" && ["RB","WR","TE"].includes(b.position))
+          || ((s.slot === "SUPER_FLEX" || s.slot === "SF") && ["QB","RB","WR","TE"].includes(b.position));
+        if (s.slot === b.position) return true;
+        if (s.slot === "FLEX" && ["RB","WR","TE"].includes(b.position)) return true;
+        if ((s.slot === "SUPER_FLEX" || s.slot === "SF") && ["QB","RB","WR","TE"].includes(b.position)) return true;
+        return false;
+      });
+      let bestSwap = null;
+      eligibleSlots.forEach(s => {
+        if (!s.player) {
+          bestSwap = { slot: s.slot, diff: b.projected, replaced: null };
+          return;
+        }
+        const diff = b.projected - s.player.projected;
+        if (diff > 0 && (!bestSwap || diff > bestSwap.diff)) {
+          bestSwap = { slot: s.slot, diff, replaced: s.player };
+        }
+      });
+      const note = bestSwap
+        ? (bestSwap.replaced
+            ? `+${bestSwap.diff.toFixed(1)} if started over ${bestSwap.replaced.name} (${bestSwap.slot === "SUPER_FLEX" ? "SF" : bestSwap.slot})`
+            : `Could fill empty ${bestSwap.slot === "SUPER_FLEX" ? "SF" : bestSwap.slot}`)
+        : "no upgrade";
+      const noteClass = bestSwap && bestSwap.diff > 0 ? "delta-pos" : "pct";
+      const cell = el("div", {});
+      cell.appendChild(document.createTextNode(b.name));
+      cell.appendChild(el("span", { class: "pos-chip " + positionClass(b.position), style: "margin-left:8px" }, b.position));
+      if (b.team) cell.appendChild(el("span", { class: "pct", style: "margin-left:6px" }, b.team));
+      if (b.opponent) cell.appendChild(el("span", { class: "pct", style: "margin-left:4px" }, "vs " + b.opponent));
+      if (b.injury) cell.appendChild(el("span", { class: "auto-grade-chip auto-miss", style: "margin-left:8px" }, b.injury));
+      cell.appendChild(el("span", { class: noteClass, style: "margin-left:8px; font-size: 12px" }, note));
+      benchCard.appendChild(el("div", { class: "pick-history-row" },
+        el("div", { class: "pick-history-slot" }, ""),
+        cell,
+        el("div", { class: "pick-history-by" }, b.projected.toFixed(1)),
+      ));
+    });
+  }
+  main.appendChild(benchCard);
+
+  // Footer
+  main.appendChild(el("div", { class: "pct", style: "margin-top:14px" },
+    "Projections from Sleeper's public weekly endpoint (RotoWire), scored using your league's scoring_settings (PPR + every bonus). " +
+    "Starting slots filled greedily highest-projection first into QB → RB → WR → TE → FLEX (RB/WR/TE) → SF (any). " +
+    "Bench rows show each player's best one-for-one upgrade if any starter has a lower projection. " +
+    "Off-season or pre-game-script weeks may show zero projections until Sleeper populates them."
+  ));
+}
+
+function renderWaivers() {
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  ensureSleeperLoaded();
+  ensureLineupDataLoaded();
+  ensureKtcDynastyLoaded();
+
+  if (!state.sleeper) {
+    main.appendChild(el("div", { class: "empty" },
+      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
+    return;
+  }
+  if (!state.lineupData) {
+    main.appendChild(el("div", { class: "empty" },
+      state.lineupDataError ? "Projections error: " + state.lineupDataError : "Loading weekly projections…"));
+    return;
+  }
+
+  const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
+  const { controls, users } = teamPickerControls(latestSeason);
+  main.appendChild(controls);
+
+  const selectedUser = users.find(u => u.user_id === state.rosterTeam);
+  const selectedRoster = latestSeason.rosters.find(r => r.owner_id === state.rosterTeam);
+  if (!selectedRoster) {
+    main.appendChild(el("div", { class: "empty" }, "Roster not found."));
+    return;
+  }
+  const selectedName = canonicalOwnerName(userDisplay(selectedUser));
+
+  const { week, season, projections, league } = state.lineupData;
+  const scoring = league.scoring_settings || {};
+  const rosterPositions = league.roster_positions || [];
+
+  // Find rostered player_ids across the whole league.
+  const rostered = new Set();
+  latestSeason.rosters.forEach(r => (r.players || []).forEach(pid => rostered.add(pid)));
+
+  // Build free-agent list: anyone with a projection > 0 not on any roster.
+  const ktcRaw = (state.ktcDynasty && state.ktcDynasty.players) || {};
+  const FA_PLAYABLE = new Set(["QB", "RB", "WR", "TE"]);
+  const fas = [];
+  Object.entries(projections).forEach(([pid, proj]) => {
+    if (rostered.has(pid)) return;
+    const sp = state.sleeper.players[pid];
+    if (!sp) return;
+    if (!FA_PLAYABLE.has(sp.position)) return;
+    const projected = scoreProjection(proj.stats, scoring);
+    if (projected <= 0) return;
+    const ktc = ktcRaw[ktcNormalizeName(sp.name)] || null;
+    fas.push({
+      id: pid,
+      name: sp.name,
+      position: sp.position,
+      team: proj.team || sp.team,
+      opponent: proj.opponent,
+      injury: proj.injury_status,
+      projected,
+      ktcValue: ktc ? ktc.value : 0,
+    });
+  });
+  fas.sort((a, b) => b.projected - a.projected);
+
+  // Build the user's optimal lineup for upgrade comparison.
+  const ownCandidates = (selectedRoster.players || []).map(pid => {
+    const p = state.sleeper.players[pid];
+    if (!p) return null;
+    const proj = projections[pid];
+    return {
+      id: pid,
+      name: p.name,
+      position: p.position,
+      projected: proj ? scoreProjection(proj.stats, scoring) : 0,
+    };
+  }).filter(Boolean);
+  const lineup = fillOptimalLineup(rosterPositions, ownCandidates);
+  function bestReplacement(fa) {
+    let best = null;
+    lineup.forEach(s => {
+      if (!s.player) return;
+      const eligible = s.slot === fa.position
+        || (s.slot === "FLEX" && ["RB","WR","TE"].includes(fa.position))
+        || ((s.slot === "SUPER_FLEX" || s.slot === "SF") && ["QB","RB","WR","TE"].includes(fa.position));
+      if (!eligible) return;
+      const diff = fa.projected - s.player.projected;
+      if (diff > 0 && (!best || diff > best.diff)) best = { diff, replaced: s.player, slot: s.slot };
+    });
+    return best;
+  }
+
+  // Header: how many upgrade-grade FAs exist for this roster
+  const upgrades = fas.map(fa => ({ fa, repl: bestReplacement(fa) })).filter(x => x.repl);
+  const lede = el("div", { class: "card-lede" });
+  lede.innerHTML = `<strong>${selectedName}</strong> · week ${week} · ` +
+    `<strong>${upgrades.length}</strong> free agents project as immediate upgrades to a starter`;
+
+  // ----- Top FAs card -----
+  const faCard = el("div", { class: "card" }, el("h2", {}, "Top Free Agents"));
+  faCard.appendChild(lede);
+  if (!fas.length) {
+    faCard.appendChild(el("div", { class: "empty" }, "No projected free agents this week."));
+  } else {
+    fas.slice(0, 30).forEach(fa => {
+      const repl = bestReplacement(fa);
+      const cell = el("div", {});
+      cell.appendChild(document.createTextNode(fa.name));
+      cell.appendChild(el("span", { class: "pos-chip " + positionClass(fa.position), style: "margin-left:8px" }, fa.position));
+      if (fa.team) cell.appendChild(el("span", { class: "pct", style: "margin-left:6px" }, fa.team));
+      if (fa.opponent) cell.appendChild(el("span", { class: "pct", style: "margin-left:4px" }, "vs " + fa.opponent));
+      if (fa.injury) cell.appendChild(el("span", { class: "auto-grade-chip auto-miss", style: "margin-left:8px" }, fa.injury));
+      if (repl) {
+        cell.appendChild(el("span", { class: "delta-pos", style: "margin-left:8px; font-size:12px" },
+          `+${repl.diff.toFixed(1)} over ${repl.replaced.name}` +
+          (repl.slot ? ` (${repl.slot === "SUPER_FLEX" ? "SF" : repl.slot})` : "")));
+      } else if (fa.ktcValue >= 1000) {
+        cell.appendChild(el("span", { class: "pct", style: "margin-left:8px; font-size:12px" },
+          `KTC stash (val ${fa.ktcValue.toLocaleString()})`));
+      }
+      faCard.appendChild(el("div", { class: "pick-history-row" },
+        el("div", { class: "pick-history-slot" }, ""),
+        cell,
+        el("div", { class: "pick-history-by" }, fa.projected.toFixed(1)),
+      ));
+    });
+  }
+  main.appendChild(faCard);
+
+  main.appendChild(el("div", { class: "pct", style: "margin-top:14px" },
+    "Free agents = QB/RB/WR/TE not on any roster, with a non-zero projection for this week. " +
+    "Projection scored with your league's settings. " +
+    "“+X over [player]” means starting this FA over your current optimal lineup adds X points; trade your existing optimal lineup for this if you have a waiver priority high enough. " +
+    "Players without an immediate upgrade but high KTC value are flagged as long-term stash candidates."
+  ));
+}
+
 function renderStats() {
   const main = document.getElementById("main");
   main.innerHTML = "";
@@ -2873,6 +3196,40 @@ async function loadKtcDynasty() {
 }
 function ensureKtcDynastyLoaded() {
   if (!state.ktcDynasty && !state.ktcDynastyLoading && !state.ktcDynastyError) loadKtcDynasty();
+}
+
+async function loadLineupData() {
+  if (state.lineupDataLoading || state.lineupData) return;
+  state.lineupDataLoading = true;
+  state.lineupDataError = null;
+  render();
+  try {
+    const res = await fetch("/api/lineup-data", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.lineupData = data;
+  } catch (e) {
+    state.lineupDataError = e.message;
+  } finally {
+    state.lineupDataLoading = false;
+    render();
+  }
+}
+function ensureLineupDataLoaded() {
+  if (!state.lineupData && !state.lineupDataLoading && !state.lineupDataError) loadLineupData();
+}
+
+// Apply your league's scoring_settings to a Sleeper raw stat object.
+// Returns projected fantasy points for that player/week.
+function scoreProjection(stats, scoring) {
+  if (!stats || !scoring) return 0;
+  let pts = 0;
+  for (const k in scoring) {
+    const v = stats[k];
+    if (v) pts += v * scoring[k];
+  }
+  return pts;
 }
 
 
@@ -3863,6 +4220,8 @@ function render() {
     case "rankings": renderRankings(); break;
     case "rosters": renderRosters(); break;
     case "teams": renderTeams(); break;
+    case "lineup": renderLineup(); break;
+    case "waivers": renderWaivers(); break;
     case "stats": renderStats(); break;
     case "trades": renderTrades(); break;
     default: renderOverview();

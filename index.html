@@ -3192,8 +3192,8 @@ function renderStats() {
     const hmp = (t.hit + t.meh) / t.graded;
     const score = strengthScore(hp, hmp);
     const delta = score - overallScore;
-    const label = delta >= 0.05 ? "Strong" : delta <= -0.05 ? "Weak" : "Average";
-    const pillClass = delta >= 0.05 ? "pill pill-strong" : delta <= -0.05 ? "pill pill-weak" : "pill pill-avg";
+    const label = delta >= 0.033 ? "Strong" : delta <= -0.033 ? "Weak" : "Average";
+    const pillClass = delta >= 0.033 ? "pill pill-strong" : delta <= -0.033 ? "pill pill-weak" : "pill pill-avg";
     ysBody.appendChild(el("tr", {},
       el("td", {}, String(y)),
       el("td", { class: "num" }, String(t.total)),
@@ -3217,7 +3217,7 @@ function renderStats() {
   ysTable.appendChild(ysBody);
   ysCard.appendChild(ysTable);
   ysCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
-    "Δ Score = (0.7 × Hit % + 0.3 × Hit + Meh %) − league average. Years above +5% earn the Strong pill; below −5% earn Weak. Hit % dominates the score but a year with extra Mehs still gets some credit."
+    "Δ Score = (0.7 × Hit % + 0.3 × Hit + Meh %) − league average. Years above +3.3% earn the Strong pill; below −3.3% earn Weak. Hit % dominates the score but a year with extra Mehs still gets some credit."
   ));
   main.appendChild(ysCard);
 

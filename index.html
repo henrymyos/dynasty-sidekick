@@ -1910,15 +1910,16 @@ function classifyAsset(ktcValue, position, age) {
     return Object.assign({ label }, DD_TIER_INFO[label]);
   }
 
-  // KTC superflex value only — Flock is not used for the tier label. Cutoffs
-  // verified against Henry-roster ground truth (Hampton 6884 = Foundational,
-  // Goff 4664 / Kyler 4140 = Mainstay, LaPorta 4512 = Upside Premier,
-  // Strange 2958 / Coker 3051 / Helm 2632 / Bigsby 2479 / Marks 2758 /
-  // Tucker 2210 = Upside Shot, Miller 1824 = Jag - Developmental,
-  // Brosmer 0 = Replaceable).
+  // KTC superflex value only — Flock is not used for the tier label.
+  // Cornerstone cutoff (6600) tuned against the Dynasty Domain chart: catches
+  // 22 of their 23 cornerstones (Bijan 9999 down to Mahomes 6648); Jordan
+  // Love (5579) is the lone miss and lands Foundational. Lower bands verified
+  // against Henry-roster ground truth (Goff 4664 / Kyler 4140 = Mainstay,
+  // LaPorta 4512 = Upside Premier, Strange/Coker/Helm/Bigsby/Marks/Tucker
+  // 2210-3051 = Upside Shot, Miller 1824 = Jag - Developmental).
   const band = ageBand(position, age);  // "young" | "prime" | "old"
   let label;
-  if (ktcValue >= 8500) {
+  if (ktcValue >= 6600) {
     label = band === "old" ? "Short Term League Winner" : "Cornerstone";
   } else if (ktcValue >= 5500) {
     label = band === "old" ? "Short Term League Winner" : "Foundational";

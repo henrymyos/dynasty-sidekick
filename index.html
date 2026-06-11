@@ -1939,13 +1939,16 @@ function posProjectionRank(playerId) {
 
 function classifyAsset(ktcValue, position, age, playerId) {
   if (ktcValue == null) ktcValue = 0;
-  // Picks: value only.
+  // Picks: value only. Picks are inherently unrealized upside, so they only
+  // map to upside-flavored tiers: Foundational when valued very high (early
+  // 1sts), Upside Premier for the rest of the 1st-round range, Upside Shot
+  // for 2nds/3rds, Jag - Developmental for the dregs. Never Mainstay/etc.
   if (position === "PICK") {
     let label;
     if (ktcValue >= 5500) label = "Foundational";
-    else if (ktcValue >= 3500) label = "Mainstay";
+    else if (ktcValue >= 3500) label = "Upside Premier";
     else if (ktcValue >= 1800) label = "Upside Shot";
-    else label = "Replaceable";
+    else label = "Jag - Developmental";
     return Object.assign({ label }, DD_TIER_INFO[label]);
   }
 

@@ -1756,38 +1756,8 @@ function computeManagerRankings() {
   const slotMap = currentRookieDraft ? currentRookieDraft.slot_to_roster_id || {} : {};
   const currentYear = parseInt(latestSeason.season, 10);
 
-  function tierForRoster(season, rosterId) {
-    if (season !== currentYear) return "mid";
-    const entry = Object.entries(slotMap).find(([, r]) => r === rosterId);
-    if (!entry) return "mid";
-    const slot = parseInt(entry[0], 10);
-    if (slot <= 4) return "early";
-    if (slot <= 8) return "mid";
-    return "late";
-  }
   function pickVal(season, round, tier) {
     return ktcPicks[`${season}|${tier}|${round}`] || 0;
-  }
-
-  const FUTURE_YEARS = [currentYear, currentYear + 1, currentYear + 2];
-  const ROUNDS = [1, 2, 3];
-  function rosterPickValue(rosterId) {
-    let total = 0;
-    FUTURE_YEARS.forEach(season => {
-      ROUNDS.forEach(round => {
-        const trades = tradedPicks.filter(t => parseInt(t.season, 10) === season && t.round === round);
-        const tradedMap = new Map();
-        trades.forEach(t => tradedMap.set(t.roster_id, t.owner_id));
-        latestSeason.rosters.forEach(r => {
-          const originalRoster = r.roster_id;
-          const currentOwner = tradedMap.has(originalRoster) ? tradedMap.get(originalRoster) : originalRoster;
-          if (currentOwner !== rosterId) return;
-          const tier = tierForRoster(season, originalRoster);
-          total += pickVal(season, round, tier);
-        });
-      });
-    });
-    return total;
   }
 
   const STARTING_SLOTS = [
@@ -1799,6 +1769,9 @@ function computeManagerRankings() {
     { pos: ["QB", "RB", "WR", "TE"], n: 1 },
   ];
 
+  // Pass 1: player value + optimal lineup value per roster (no picks yet —
+  // the contender ranks derived from this pass decide the projected tier of
+  // future-year picks).
   const rows = latestSeason.rosters.map(r => {
     const user = latestSeason.users.find(u => u.user_id === r.owner_id);
     const name = user ? canonicalOwnerName(userDisplay(user)) : "—";
@@ -1822,15 +1795,57 @@ function computeManagerRankings() {
         used.add(pool[i].pid);
       }
     });
-    const pickValue = rosterPickValue(r.roster_id);
-    return {
-      roster_id: r.roster_id,
-      name,
-      playerValue,
-      pickValue,
-      totalValue: playerValue + pickValue,
-      optimalValue,
-    };
+    return { roster_id: r.roster_id, name, playerValue, optimalValue };
+  });
+
+  // Contender ranks (1 = strongest lineup) drive future-pick tier projection:
+  // strong teams pick late, weak teams pick early.
+  const preConRank = {};
+  rows.slice().sort((a, b) => b.optimalValue - a.optimalValue)
+    .forEach((r, i) => { preConRank[r.roster_id] = i + 1; });
+  const nTeamsForTier = rows.length || 12;
+  function tierForRoster(season, rosterId) {
+    if (season === currentYear) {
+      const entry = Object.entries(slotMap).find(([, r]) => r === rosterId);
+      if (!entry) return "mid";
+      const slot = parseInt(entry[0], 10);
+      if (slot <= 4) return "early";
+      if (slot <= 8) return "mid";
+      return "late";
+    }
+    // Future seasons: project draft position from current contender rank.
+    const rank = preConRank[rosterId];
+    if (rank == null) return "mid";
+    if (rank <= nTeamsForTier / 3) return "late";       // strong lineup → late pick
+    if (rank <= (2 * nTeamsForTier) / 3) return "mid";
+    return "early";                                      // weak lineup → early pick
+  }
+
+  const FUTURE_YEARS = [currentYear, currentYear + 1, currentYear + 2];
+  const ROUNDS = [1, 2, 3];
+  function rosterPickValue(rosterId) {
+    let total = 0;
+    FUTURE_YEARS.forEach(season => {
+      ROUNDS.forEach(round => {
+        const trades = tradedPicks.filter(t => parseInt(t.season, 10) === season && t.round === round);
+        const tradedMap = new Map();
+        trades.forEach(t => tradedMap.set(t.roster_id, t.owner_id));
+        latestSeason.rosters.forEach(r => {
+          const originalRoster = r.roster_id;
+          const currentOwner = tradedMap.has(originalRoster) ? tradedMap.get(originalRoster) : originalRoster;
+          if (currentOwner !== rosterId) return;
+          const tier = tierForRoster(season, originalRoster);
+          total += pickVal(season, round, tier);
+        });
+      });
+    });
+    return total;
+  }
+
+  // Pass 2: fold in pick values now that future tiers are projected.
+  rows.forEach(r => {
+    r.pickValue = rosterPickValue(r.roster_id);
+    r.totalValue = r.playerValue + r.pickValue;
   });
 
   const N = rows.length;
@@ -1982,7 +1997,8 @@ function renderRankings() {
   card.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
     "Total = sum of latest KTC superflex values for each roster's players + every future pick currently owned " +
     "(originally theirs minus traded away plus acquired). Pick tier (Early / Mid / Late) is set by the current draft's slot order " +
-    "for 2026 picks; future-year picks default to Mid. Starters = KTC value of the optimal starting lineup (1 QB, 2 RB, 3 WR, 1 TE, 1 FLEX, 1 SF). " +
+    "for 2026 picks; 2027/2028 pick tiers are projected from the original owner's current contender rank — strong lineups project late picks, weak lineups early. " +
+    "Starters = KTC value of the optimal starting lineup (1 QB, 2 RB, 3 WR, 1 TE, 1 FLEX, 1 SF). " +
     "Status is set by Contender rank (starting-lineup strength): top half of the league → Contender, " +
     "third quarter → Middler, bottom quarter → Reloader. In a 12-team league that's #1-6 / #7-9 / #10-12."
   ));
@@ -2291,8 +2307,20 @@ function renderRosters() {
   );
   const slotMap = currentRookieDraft ? currentRookieDraft.slot_to_roster_id || {} : {};
   const currentYear = parseInt(latestSeason.season, 10);
+  // Future-pick tier projection from current contender ranks (strong lineup
+  // → late pick, weak → early), mirroring computeManagerRankings.
+  const mgrRankedForTiers = computeManagerRankings() || [];
+  const conRankForTiers = {};
+  mgrRankedForTiers.forEach(r => { conRankForTiers[r.roster_id] = r.cRank; });
+  const nTeamsForTiers = mgrRankedForTiers.length || 12;
   function tierFor(season, originalRosterId) {
-    if (season !== currentYear) return "mid";
+    if (season !== currentYear) {
+      const rank = conRankForTiers[originalRosterId];
+      if (rank == null) return "mid";
+      if (rank <= nTeamsForTiers / 3) return "late";
+      if (rank <= (2 * nTeamsForTiers) / 3) return "mid";
+      return "early";
+    }
     const entry = Object.entries(slotMap).find(([, r]) => r === originalRosterId);
     if (!entry) return "mid";
     const slot = parseInt(entry[0], 10);

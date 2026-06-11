@@ -2017,6 +2017,78 @@ function classifyAsset(ktcValue, position, age, playerId) {
   return Object.assign({ label }, DD_TIER_INFO[label]);
 }
 
+// Shared "Player Categories" card: star chart + expandable descriptions.
+// Used on Roster Detail and All Players.
+const TIER_LEGEND_ORDER = [
+  "Cornerstone", "Foundational", "Upside Premier", "Mainstay",
+  "Productive Vet", "Short Term League Winner",
+  "Upside Shot", "Short Term Production", "Serviceable",
+  "Jag - Insurance", "Jag - Developmental", "Replaceable",
+];
+const TIER_LEGEND_DESC = {
+  "Cornerstone":              "League-winning anchor — top of the entire dynasty board in his prime. Build around him; almost untouchable in trades.",
+  "Foundational":             "Long-term centerpiece — high-end starter, in his prime, who will drive your roster for years. Only move for another foundational asset.",
+  "Upside Premier":           "Young player whose value already says high-end starter. Hasn't fully popped yet but the arrow is up — pay to get him, hold for the breakout.",
+  "Mainstay":                 "Solid in-prime starter. Not the player you build around but the one who fills a starting slot every week without thinking.",
+  "Productive Vet":           "Past the age curve but still producing as a starter. Squeezes a couple more useful seasons before the decline accelerates.",
+  "Short Term League Winner": "Elite-but-aging asset. Can carry a contender this year or next, then falls off a cliff. Premium for contenders, dead weight on a rebuild.",
+  "Upside Shot":              "Young or in-prime bench piece with real upside. One coaching change or injury away from a breakout — worth the roster spot.",
+  "Short Term Production":    "Aging starter or flex with one meaningful season left. Plug-and-play this year; don't expect more.",
+  "Serviceable":              "Quiet bench depth. No upside path and no immediate impact, but holds a spot in case you need a body.",
+  "Jag - Insurance":          "Older deep-bench body kept around as injury insurance. Slot a starter goes down? He plays. Otherwise invisible.",
+  "Jag - Developmental":      "Young deep-bench dart throw. Probably never amounts to anything, but cheap to stash while you watch.",
+  "Replaceable":              "No value, no path, no upside. Cut for any waiver claim that comes along.",
+};
+
+function buildTierLegendCard() {
+  const legendCard = el("div", { class: "card" }, el("h2", {}, "Player Categories"));
+  legendCard.appendChild(el("div", { class: "pct", style: "margin-bottom:10px" },
+    "Categories assigned daily from each player's KTC superflex dynasty value crossed with his age band on the position curve " +
+    "(backup QBs demote to upside tiers; picks classified by value alone). " +
+    "Star ratings follow the Dynasty Domain chart: Production Upside = how much they score now; Value Increase Upside = how much their trade value can still grow."
+  ));
+  function stars(n) {
+    if (!n) return el("span", { class: "pct" }, "—");
+    return el("span", { class: "star-row" }, "★".repeat(n));
+  }
+  const chartTable = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", {}, "Player Category"),
+      el("th", {}, "Production Upside"),
+      el("th", {}, "Value Increase Upside"),
+    )),
+  );
+  const chartBody = el("tbody", {});
+  TIER_LEGEND_ORDER.forEach(label => {
+    const info = DD_TIER_INFO[label];
+    if (!info) return;
+    chartBody.appendChild(el("tr", {},
+      el("td", {}, el("span", { class: "auto-grade-chip " + info.chip }, label)),
+      el("td", {}, stars(info.prod)),
+      el("td", {}, stars(info.value)),
+    ));
+  });
+  chartTable.appendChild(chartBody);
+  legendCard.appendChild(chartTable);
+
+  const legendDetails = el("details", { style: "margin-top: 14px" });
+  legendDetails.appendChild(el("summary", {
+    style: "cursor:pointer; font-size: 13px; font-weight: 600; color: var(--accent); user-select: none;",
+  }, "What each category means"));
+  const legendGrid = el("div", { class: "tier-legend", style: "margin-top: 10px" });
+  TIER_LEGEND_ORDER.forEach(label => {
+    const info = DD_TIER_INFO[label] || { chip: "" };
+    const card = el("div", { class: "tier-card" });
+    card.appendChild(el("div", { class: "tier-head" },
+      el("span", { class: "auto-grade-chip " + info.chip }, label)));
+    card.appendChild(el("div", { class: "tier-desc" }, TIER_LEGEND_DESC[label] || ""));
+    legendGrid.appendChild(card);
+  });
+  legendDetails.appendChild(legendGrid);
+  legendCard.appendChild(legendDetails);
+  return legendCard;
+}
+
 function renderRosters() {
   const main = document.getElementById("main");
   main.innerHTML = "";
@@ -2247,68 +2319,7 @@ function renderRosters() {
   });
   main.appendChild(rosterCard);
 
-  // ===== Tier legend =====
-  const TIER_LEGEND = [
-    ["Cornerstone",              "League-winning anchor — top of the entire dynasty board in his prime. Build around him; almost untouchable in trades."],
-    ["Foundational",              "Long-term centerpiece — high-end starter, in his prime, who will drive your roster for years. Only move for another foundational asset."],
-    ["Upside Premier",            "Young player whose value already says high-end starter. Hasn't fully popped yet but the arrow is up — pay to get him, hold for the breakout."],
-    ["Mainstay",                  "Solid in-prime starter. Not the player you build around but the one who fills a starting slot every week without thinking."],
-    ["Productive Vet",            "Past the age curve but still producing as a starter. Squeezes a couple more useful seasons before the decline accelerates."],
-    ["Short Term League Winner",  "Elite-but-aging asset. Can carry a contender this year or next, then falls off a cliff. Premium for contenders, dead weight on a rebuild."],
-    ["Upside Shot",               "Young or in-prime bench piece with real upside. One coaching change or injury away from a breakout — worth the roster spot."],
-    ["Short Term Production",     "Aging starter or flex with one meaningful season left. Plug-and-play this year; don't expect more."],
-    ["Serviceable",               "Quiet bench depth. No upside path and no immediate impact, but holds a spot in case you need a body."],
-    ["Jag - Insurance",           "Older deep-bench body kept around as injury insurance. Slot a starter goes down? He plays. Otherwise invisible."],
-    ["Jag - Developmental",       "Young deep-bench dart throw. Probably never amounts to anything, but cheap to stash while you watch."],
-    ["Replaceable",               "No value, no path, no upside. Cut for any waiver claim that comes along."],
-  ];
-  const legendCard = el("div", { class: "card" }, el("h2", {}, "Player Categories"));
-  legendCard.appendChild(el("div", { class: "pct", style: "margin-bottom:10px" },
-    "Categories assigned daily from each player's KTC superflex dynasty value crossed with his age band on the position curve. Picks classified by value alone. " +
-    "Star ratings follow the Dynasty Domain chart: Production Upside = how much they score now; Value Increase Upside = how much their trade value can still grow."
-  ));
-  function stars(n) {
-    if (!n) return el("span", { class: "pct" }, "—");
-    return el("span", { class: "star-row" }, "★".repeat(n));
-  }
-  const chartTable = el("table", {},
-    el("thead", {}, el("tr", {},
-      el("th", {}, "Player Category"),
-      el("th", {}, "Production Upside"),
-      el("th", {}, "Value Increase Upside"),
-    )),
-  );
-  const chartBody = el("tbody", {});
-  TIER_ORDER.forEach(label => {
-    const info = DD_TIER_INFO[label];
-    if (!info) return;
-    chartBody.appendChild(el("tr", {},
-      el("td", {}, el("span", { class: "auto-grade-chip " + info.chip }, label)),
-      el("td", {}, stars(info.prod)),
-      el("td", {}, stars(info.value)),
-    ));
-  });
-  chartTable.appendChild(chartBody);
-  legendCard.appendChild(chartTable);
-
-  // Expandable descriptions below the chart.
-  const legendDetails = el("details", { style: "margin-top: 14px" });
-  legendDetails.appendChild(el("summary", {
-    style: "cursor:pointer; font-size: 13px; font-weight: 600; color: var(--accent); user-select: none;",
-  }, "What each category means"));
-  const legendGrid = el("div", { class: "tier-legend", style: "margin-top: 10px" });
-  TIER_LEGEND.forEach(([label, desc]) => {
-    const info = DD_TIER_INFO[label] || { chip: "" };
-    const card = el("div", { class: "tier-card" });
-    const head = el("div", { class: "tier-head" });
-    head.appendChild(el("span", { class: "auto-grade-chip " + info.chip }, label));
-    card.appendChild(head);
-    card.appendChild(el("div", { class: "tier-desc" }, desc));
-    legendGrid.appendChild(card);
-  });
-  legendDetails.appendChild(legendGrid);
-  legendCard.appendChild(legendDetails);
-  main.appendChild(legendCard);
+  main.appendChild(buildTierLegendCard());
 
   // ===== Multi-asset Trade Explorer =====
   const tradeCard = el("div", { class: "card" }, el("h2", {}, "Suggested Trades"));
@@ -3190,6 +3201,7 @@ function renderAllPlayers() {
     listCard.appendChild(el("div", { class: "empty" }, "No players match this filter."));
   }
   main.appendChild(listCard);
+  main.appendChild(buildTierLegendCard());
 }
 
 function renderStats() {

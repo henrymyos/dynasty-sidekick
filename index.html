@@ -1997,6 +1997,23 @@ function classifyAsset(ktcValue, position, age, playerId) {
   } else {
     label = "Replaceable";
   }
+
+  // Depth-chart override for QBs: a backup (depth_chart_order >= 2) isn't a
+  // weekly producer no matter his age or value — Justin Fields / Mac Jones
+  // types read Upside Shot, not Short Term Production / Productive Vet.
+  // Production-flavored tiers demote to Upside Shot; elite-value backups
+  // (rare) demote to Upside Premier since their value implies a future job.
+  if (position === "QB" && playerId != null && state.sleeper && state.sleeper.players) {
+    const sp = state.sleeper.players[playerId];
+    if (sp && typeof sp.depth_chart_order === "number" && sp.depth_chart_order >= 2) {
+      const PRODUCTION_TIERS = new Set([
+        "Mainstay", "Productive Vet", "Short Term Production", "Short Term League Winner",
+      ]);
+      const ELITE_TIERS = new Set(["Cornerstone", "Foundational"]);
+      if (PRODUCTION_TIERS.has(label)) label = "Upside Shot";
+      else if (ELITE_TIERS.has(label)) label = "Upside Premier";
+    }
+  }
   return Object.assign({ label }, DD_TIER_INFO[label]);
 }
 

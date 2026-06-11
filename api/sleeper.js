@@ -93,6 +93,7 @@ export default async function handler(req, res) {
         team: p.team || null,
         age: typeof p.age === "number" ? p.age : null,
         years_exp: typeof p.years_exp === "number" ? p.years_exp : null,
+        depth_chart_order: typeof p.depth_chart_order === "number" ? p.depth_chart_order : null,
       };
     });
 

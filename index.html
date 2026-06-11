@@ -258,6 +258,28 @@
   th.sortable.active { color: var(--accent); }
   th.sortable.active .arrow { opacity: 1; }
   tr:hover td { background: var(--panel-2); }
+  /* League History grids (years x managers). Cell tints need the hover
+     variants too so the row-hover rule doesn't wash them out. */
+  .hist-table th, .hist-table td { padding: 8px 10px; text-align: center; white-space: nowrap; }
+  .hist-table th:first-child, .hist-table td:first-child {
+    text-align: left;
+    position: sticky;
+    left: 0;
+    background: var(--panel);
+    z-index: 1;
+  }
+  .hist-table td { font-variant-numeric: tabular-nums; }
+  .hist-table td.fin-1,   .hist-table tr:hover td.fin-1   { background: rgba(227, 179, 65, 0.24); color: #e3b341; font-weight: 700; }
+  .hist-table td.fin-2,   .hist-table tr:hover td.fin-2   { background: rgba(176, 186, 197, 0.20); color: #c9d1d9; font-weight: 600; }
+  .hist-table td.fin-3,   .hist-table tr:hover td.fin-3   { background: rgba(219, 109, 40, 0.22); color: #db6d28; font-weight: 600; }
+  .hist-table td.fin-po,  .hist-table tr:hover td.fin-po  { background: rgba(46, 160, 67, 0.16); color: #3fb950; }
+  .hist-table td.fin-bot, .hist-table tr:hover td.fin-bot { background: rgba(248, 81, 73, 0.13); color: #f85149; }
+  .hist-table td.rec-champ,  .hist-table tr:hover td.rec-champ  { background: rgba(227, 179, 65, 0.24); color: #e3b341; font-weight: 700; }
+  .hist-table td.rec-runner, .hist-table tr:hover td.rec-runner { background: rgba(88, 166, 255, 0.16); color: var(--accent); font-weight: 600; }
+  .hist-table tr.hist-proj td { color: var(--muted); font-style: italic; }
+  .hist-table tr.hist-summary-top td, .hist-table tr.hist-summary-top th { border-top: 2px solid var(--border); }
+  .hist-table th.metric-label { text-align: left; }
+  .hist-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .bar-row {
     display: flex;
     height: 6px;
@@ -4663,6 +4685,210 @@ function renderTradePickLine(dp, allSeasons, players, tradeCreated) {
   return line;
 }
 
+// ---------- League History (standings + records) ----------
+// Final standings are derived from the NEXT season's rookie-draft order: the
+// league assigns slots in reverse order of finish, so finish = N + 1 - slot.
+// Verified against the league sheet for 2019, 2024 and 2025 (all 12 match,
+// including consolation placements that Sleeper's losers bracket gets wrong).
+function canonicalUserName(u) {
+  const byTeam = canonicalOwnerName(userDisplay(u));
+  // If the (possibly old) team name didn't map, fall back to the account
+  // display name, which is always in the merge table.
+  if (u && u.team_name && byTeam === u.team_name) {
+    const byHandle = canonicalOwnerName(u.display_name || "");
+    if (byHandle && byHandle !== u.display_name) return byHandle;
+  }
+  return byTeam;
+}
+
+function computeLeagueHistory() {
+  if (!state.sleeper || !state.sleeper.seasons.length) return null;
+  const seasons = state.sleeper.seasons;  // oldest → newest
+  const years = [];
+  for (let i = 0; i < seasons.length; i++) {
+    const season = seasons[i];
+    const next = seasons[i + 1];
+    const entry = { year: season.season, finishes: {}, records: {}, teams: 0, hasGames: false };
+    season.rosters.forEach(r => {
+      const u = season.users.find(x => x.user_id === r.owner_id);
+      if (!u) return;
+      const name = canonicalUserName(u);
+      const w = r.wins || 0, l = r.losses || 0, t = r.ties || 0;
+      if (w + l + t > 0) {
+        entry.hasGames = true;
+        entry.records[name] = w + "-" + l + (t ? "-" + t : "");
+      }
+    });
+    if (next) {
+      const draft = (next.drafts || []).find(d => d.slot_to_roster_id && Object.keys(d.slot_to_roster_id).length);
+      if (draft) {
+        const slots = Object.entries(draft.slot_to_roster_id);
+        const n = slots.length;
+        entry.teams = n;
+        slots.forEach(([slot, rid]) => {
+          const user = rosterToOwner(next, rid);
+          if (!user) return;
+          entry.finishes[canonicalUserName(user)] = n + 1 - parseInt(slot, 10);
+        });
+      }
+    }
+    if (Object.keys(entry.finishes).length || entry.hasGames) years.push(entry);
+  }
+  return years;
+}
+
+function renderHistory() {
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  ensureSleeperLoaded();
+  ensureKtcDynastyLoaded();
+
+  if (state.sleeperLoading) {
+    main.appendChild(el("div", { class: "empty" }, "Loading from Sleeper…"));
+    return;
+  }
+  if (state.sleeperError) {
+    main.appendChild(el("div", { class: "empty" }, "Sleeper error: " + state.sleeperError));
+    return;
+  }
+  const hist = computeLeagueHistory();
+  if (!hist || !hist.length) {
+    main.appendChild(el("div", { class: "empty" }, "No league history available."));
+    return;
+  }
+
+  const finishedYears = hist.filter(y => Object.keys(y.finishes).length);
+  const recordYears = hist.filter(y => y.hasGames);
+
+  // Per-manager summary metrics, computed over completed seasons only —
+  // same math as the league sheet (AVG Finish excludes the current year).
+  const managers = {};
+  finishedYears.forEach(y => {
+    const playoffCut = Math.floor((y.teams || 12) / 2);
+    Object.entries(y.finishes).forEach(([name, place]) => {
+      const m = managers[name] || (managers[name] = { name, finishes: [], wins: 0, top2: 0, top3: 0, playoffs: 0 });
+      m.finishes.push(place);
+      if (place === 1) m.wins++;
+      if (place <= 2) m.top2++;
+      if (place <= 3) m.top3++;
+      if (place <= playoffCut) m.playoffs++;
+    });
+  });
+  const mgrList = Object.values(managers);
+  mgrList.forEach(m => { m.avg = m.finishes.reduce((a, b) => a + b, 0) / m.finishes.length; });
+
+  // Column order is sortable by the summary-row metrics; default AVG Finish
+  // ascending (best manager first).
+  if (!state.historySortKey) { state.historySortKey = "avg"; state.historySortDir = 1; }
+  const key = state.historySortKey, dir = state.historySortDir;
+  mgrList.sort((a, b) => {
+    if (a[key] !== b[key]) return (a[key] - b[key]) * dir;
+    if (a.avg !== b.avg) return a.avg - b.avg;
+    return a.name.localeCompare(b.name);
+  });
+  const names = mgrList.map(m => m.name);
+
+  function finClass(place, teams) {
+    if (place === 1) return "fin-1";
+    if (place === 2) return "fin-2";
+    if (place === 3) return "fin-3";
+    if (place <= Math.floor((teams || 12) / 2)) return "fin-po";
+    if (place >= (teams || 12) - 2) return "fin-bot";
+    return "";
+  }
+
+  // ----- Card 1: final standings by year + summary metrics -----
+  const standCard = el("div", { class: "card" }, el("h2", {}, "Final Standings by Year"));
+  const sTable = el("table", { class: "hist-table" });
+  sTable.appendChild(el("thead", {}, el("tr", {},
+    el("th", {}, "Year"),
+    ...names.map(n => el("th", {}, n)),
+  )));
+  const sBody = el("tbody");
+  finishedYears.forEach(y => {
+    sBody.appendChild(el("tr", {},
+      el("td", {}, y.year),
+      ...names.map(n => {
+        const place = y.finishes[n];
+        return el("td", { class: place != null ? finClass(place, y.teams) : "" },
+          place != null ? String(place) : "—");
+      }),
+    ));
+  });
+
+  // Projected row for the current (unplayed) season, from contender ranks.
+  const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
+  const latestDone = finishedYears.some(y => y.year === latestSeason.season);
+  if (!latestDone && state.ktcDynasty) {
+    const ranked = computeManagerRankings();
+    if (ranked) {
+      const projByName = {};
+      ranked.forEach(r => { projByName[r.name] = r.cRank; });
+      sBody.appendChild(el("tr", { class: "hist-proj" },
+        el("td", {}, latestSeason.season + " *"),
+        ...names.map(n => el("td", {}, projByName[n] != null ? String(projByName[n]) : "—")),
+      ));
+    }
+  }
+
+  // Summary rows — clickable labels re-sort the manager columns.
+  const METRICS = [
+    { key: "avg", label: "AVG Finish", fmt: m => m.avg.toFixed(2), defaultDir: 1 },
+    { key: "wins", label: "Wins", fmt: m => String(m.wins), defaultDir: -1 },
+    { key: "top2", label: "Top 2", fmt: m => String(m.top2), defaultDir: -1 },
+    { key: "top3", label: "Top 3", fmt: m => String(m.top3), defaultDir: -1 },
+    { key: "playoffs", label: "Playoffs", fmt: m => String(m.playoffs), defaultDir: -1 },
+  ];
+  METRICS.forEach((metric, idx) => {
+    const active = key === metric.key;
+    const th = el("th", {
+      class: "metric-label sortable" + (active ? " active" : ""),
+    }, metric.label, el("span", { class: "arrow" }, active ? (dir === 1 ? "↑" : "↓") : ""));
+    th.addEventListener("click", () => {
+      if (state.historySortKey === metric.key) state.historySortDir = -state.historySortDir;
+      else { state.historySortKey = metric.key; state.historySortDir = metric.defaultDir; }
+      render();
+    });
+    sBody.appendChild(el("tr", { class: idx === 0 ? "hist-summary-top" : "" },
+      th,
+      ...mgrList.map(m => el("td", {}, metric.fmt(m))),
+    ));
+  });
+  sTable.appendChild(sBody);
+  standCard.appendChild(sTable);
+  standCard.appendChild(el("div", { class: "hist-note" },
+    "Standings derived from the next season's rookie-draft order (reverse of finish). " +
+    "Gold / silver / bronze = top three, green = made playoffs, red = bottom three. " +
+    (latestDone ? "" : "* Projected from current contender rankings.")));
+  main.appendChild(standCard);
+
+  // ----- Card 2: regular-season records -----
+  const finishByYear = {};
+  finishedYears.forEach(y => { finishByYear[y.year] = y.finishes; });
+  const recCard = el("div", { class: "card" }, el("h2", {}, "Regular Season Records"));
+  const rTable = el("table", { class: "hist-table" });
+  rTable.appendChild(el("thead", {}, el("tr", {},
+    el("th", {}, "Year"),
+    ...names.map(n => el("th", {}, n)),
+  )));
+  const rBody = el("tbody");
+  recordYears.forEach(y => {
+    const fins = finishByYear[y.year] || {};
+    rBody.appendChild(el("tr", {},
+      el("td", {}, y.year),
+      ...names.map(n => {
+        const cls = fins[n] === 1 ? "rec-champ" : fins[n] === 2 ? "rec-runner" : "";
+        return el("td", { class: cls }, y.records[n] || "—");
+      }),
+    ));
+  });
+  rTable.appendChild(rBody);
+  recCard.appendChild(rTable);
+  recCard.appendChild(el("div", { class: "hist-note" },
+    "Champion highlighted gold, runner-up blue."));
+  main.appendChild(recCard);
+}
+
 // ---------- Live Draft workspace ----------
 async function loadDraftLive() {
   state.draft.loading = true;
@@ -4735,6 +4961,7 @@ const WORKSPACE_TABS = {
     { view: "leaderboard", label: "Drafters" },
     { view: "stats", label: "Stats" },
     { view: "trades", label: "Trades" },
+    { view: "history", label: "History" },
   ],
   team: [
     { view: "liveDraft", label: "Live Draft" },
@@ -5455,6 +5682,7 @@ function render() {
     case "leaderboard": renderLeaderboard(); break;
     case "stats": renderStats(); break;
     case "trades": renderTrades(); break;
+    case "history": renderHistory(); break;
     case "overview": renderOverview(); break;
     // Team workspace
     case "teams": renderTeams(); break;

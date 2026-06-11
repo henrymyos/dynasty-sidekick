@@ -1376,7 +1376,7 @@ function extractPicks(rows) {
         round: currentRound,
         pickInRound,
         slot,
-        person: person === "Me" ? "Henry" : person,
+        person: person === "Me" ? "Henry" : person === "Dad" ? "Dave" : person,
         player: player || null,
         result: normalizeResult(result),
         color,
@@ -4403,14 +4403,15 @@ const OWNER_NAME_MERGES = {
   "Desert Power": "Isaac",
   "Eccentric Thousandaires": "Isaac",
   "One Shot Babies": "Isaac",
-  // Dad
-  "davemyos": "Dad",
-  "Beat My Kids": "Dad",
-  "Beat My Kids Tour 2026": "Dad",
-  "tank u, next": "Dad",
-  "Super Dave": "Dad",
-  "Moo Lawn Moving Company": "Dad",
-  "Thunder Down Under": "Dad",
+  // Dave
+  "davemyos": "Dave",
+  "Beat My Kids": "Dave",
+  "Beat My Kids Tour 2026": "Dave",
+  "tank u, next": "Dave",
+  "Super Dave": "Dave",
+  "Moo Lawn Moving Company": "Dave",
+  "Thunder Down Under": "Dave",
+  "Dad": "Dave",
   // Joseph
   "ChampaignTornadoes": "Joseph",
   "daynamyos": "Joseph",
@@ -4773,6 +4774,7 @@ function prettyMgrName(s) {
   const t = (s || "").trim();
   if (!t) return "";
   if (t.toUpperCase() === "ME") return "Henry";
+  if (t.toUpperCase() === "DAD") return "Dave";
   return t[0].toUpperCase() + t.slice(1).toLowerCase();
 }
 function parseAlltimeSheet(rows) {
@@ -5668,7 +5670,7 @@ function renderDraftWorkspace() {
       "Seth":    { QB: 5,  RB: 4,  WR: 5,  TE: 8 },
       "Paige":   { QB: 10, RB: 8,  WR: 4,  TE: 1 },
       "Jacques": { QB: 7,  RB: 7,  WR: 3,  TE: 6 },
-      "Dad":     { QB: 4,  RB: 6,  WR: 8,  TE: 5 },
+      "Dave":    { QB: 4,  RB: 6,  WR: 8,  TE: 5 },
       "Charlie": { QB: 3,  RB: 11, WR: 7,  TE: 11 },
       "Simon":   { QB: 8,  RB: 5,  WR: 11, TE: 3 },
       "John":    { QB: 9,  RB: 10, WR: 10, TE: 9 },

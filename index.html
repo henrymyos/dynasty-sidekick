@@ -1850,9 +1850,15 @@ function computeManagerRankings() {
   });
 }
 
-function classifyManager(composite) {
-  if (composite < 0.4) return { label: "Contender", pill: "pill-strong" };
-  if (composite < 0.7) return { label: "Middler", pill: "pill-avg" };
+// Status is driven by the contender rank (starting-lineup strength), not the
+// value-weighted composite: a team with a top-half lineup can win now even if
+// its total asset value is thin, so it's a Contender regardless.
+//   cRank in the top half      → Contender
+//   cRank in the third quarter → Middler
+//   bottom quarter             → Reloader
+function classifyManager(cRank, totalTeams) {
+  if (cRank <= totalTeams / 2) return { label: "Contender", pill: "pill-strong" };
+  if (cRank <= totalTeams * 0.75) return { label: "Middler", pill: "pill-avg" };
   return { label: "Reloader", pill: "pill-weak" };
 }
 
@@ -1932,7 +1938,7 @@ function renderRankings() {
   }
 
   const buckets = { Contender: 0, Middler: 0, Reloader: 0 };
-  ranked.forEach(r => { buckets[classifyManager(r.composite).label]++; });
+  ranked.forEach(r => { buckets[classifyManager(r.cRank, ranked.length).label]++; });
   const lede = el("div", { class: "card-lede" });
   lede.innerHTML = `<strong>${buckets.Contender}</strong> contenders  ·  ` +
     `<strong>${buckets.Middler}</strong> middlers  ·  ` +
@@ -1959,7 +1965,7 @@ function renderRankings() {
   );
   const tbody = el("tbody", {});
   sorted.forEach(r => {
-    const cls = classifyManager(r.composite);
+    const cls = classifyManager(r.cRank, ranked.length);
     tbody.appendChild(el("tr", {},
       el("td", {}, r.name),
       el("td", { class: "num" }, "#" + r.vRank),
@@ -1977,8 +1983,8 @@ function renderRankings() {
     "Total = sum of latest KTC superflex values for each roster's players + every future pick currently owned " +
     "(originally theirs minus traded away plus acquired). Pick tier (Early / Mid / Late) is set by the current draft's slot order " +
     "for 2026 picks; future-year picks default to Mid. Starters = KTC value of the optimal starting lineup (1 QB, 2 RB, 3 WR, 1 TE, 1 FLEX, 1 SF). " +
-    "Status follows Sleeper Portfolio's formula: composite = 0.6 × value-percentile + 0.4 × contender-percentile (0 = best, 1 = worst). " +
-    "Composite < 0.4 → Contender, 0.4-0.7 → Middler, ≥ 0.7 → Reloader."
+    "Status is set by Contender rank (starting-lineup strength): top half of the league → Contender, " +
+    "third quarter → Middler, bottom quarter → Reloader. In a 12-team league that's #1-6 / #7-9 / #10-12."
   ));
   main.appendChild(card);
 }
@@ -2552,7 +2558,7 @@ function renderRosters() {
   const ranked = computeManagerRankings();
   const managerType = {};
   if (ranked) {
-    ranked.forEach(r => { managerType[r.roster_id] = classifyManager(r.composite).label; });
+    ranked.forEach(r => { managerType[r.roster_id] = classifyManager(r.cRank, ranked.length).label; });
   }
   const myType = managerType[selectedRoster.roster_id] || "Middler";
 

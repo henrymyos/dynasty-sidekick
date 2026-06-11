@@ -5184,19 +5184,13 @@ function renderDraftWorkspace() {
         posRank: derivedPosRank[norm] != null ? derivedPosRank[norm] : null,
       });
     });
-    // Columns ordered by group total value, then QB and WR swap places.
+    // Fixed column order: QB, RB, WR, TE. Players sorted by value within each.
     const cols = ["QB", "RB", "WR", "TE"]
       .map(pos => {
         const items = byPos[pos].sort((a, b) => b.value - a.value);
         return { pos, items, total: items.reduce((s, x) => s + x.value, 0) };
       })
-      .filter(c => c.items.length)
-      .sort((a, b) => b.total - a.total);
-    const qbIdx = cols.findIndex(c => c.pos === "QB");
-    const wrIdx = cols.findIndex(c => c.pos === "WR");
-    if (qbIdx >= 0 && wrIdx >= 0) {
-      [cols[qbIdx], cols[wrIdx]] = [cols[wrIdx], cols[qbIdx]];
-    }
+      .filter(c => c.items.length);
     const posGrid = el("div", { class: "roster-pos-grid" });
     cols.forEach(({ pos, items, total }) => {
       const col = el("div", { class: "roster-pos-col" });

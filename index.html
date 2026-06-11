@@ -504,6 +504,56 @@
     color: var(--text);
   }
   .roster-chip.is-rookie { color: var(--accent); border: 1px solid rgba(88,166,255,0.4); }
+  /* Live Draft roster: one column per position */
+  .roster-pos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+  }
+  .roster-pos-col {
+    background: var(--panel-2);
+    border-radius: 8px;
+    padding: 8px;
+    min-width: 0;
+  }
+  .roster-pos-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .roster-pos-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 2px;
+    font-size: 12px;
+    min-width: 0;
+  }
+  .roster-pos-row.is-rookie .rp-name { color: var(--accent); }
+  .rp-rank {
+    flex-shrink: 0;
+    min-width: 36px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .rp-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rp-val {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
   .draft-pill {
     display: inline-block;
     padding: 2px 6px;
@@ -5076,42 +5126,43 @@ function renderDraftWorkspace() {
   if (!myRoster || !myRoster.players.length) {
     rosterCard.appendChild(el("div", { class: "empty" }, "No roster found."));
   } else {
-    const byPos = { QB: [], RB: [], WR: [], TE: [], OTHER: [] };
+    const byPos = { QB: [], RB: [], WR: [], TE: [] };
     myRoster.players.forEach(pid => {
       const p = d.players[pid];
-      if (!p) return;
-      const bucket = byPos[p.position] ? p.position : "OTHER";
-      byPos[bucket].push(p);
+      if (!p || !byPos[p.position]) return;
+      const entry = dyn[ktcNorm(p.name)];
+      byPos[p.position].push({
+        pl: p,
+        value: entry ? (entry.value || 0) : 0,
+        posRank: entry && entry.positionRank != null ? entry.positionRank : null,
+      });
     });
-    ["QB", "RB", "WR", "TE"].forEach(pos => {
-      if (!byPos[pos].length) return;
-      const sec = el("div", { class: "roster-section" },
-        el("h4", {}, `${pos} (${byPos[pos].length})`),
-      );
-      const list = el("div", { class: "roster-list" });
-      byPos[pos]
-        .map(pl => {
-          const entry = dyn[ktcNorm(pl.name)];
-          return { pl, entry, value: entry ? (entry.value || 0) : 0 };
-        })
-        .sort((a, b) => b.value - a.value)
-        .forEach(({ pl, entry, value }) => {
-          const chip = el("div", { class: "roster-chip" + (pl.rookie ? " is-rookie" : "") }, pl.name);
-          if (entry && entry.positionRank != null) {
-            chip.appendChild(el("span", {
-              style: "color:var(--accent); margin-left:6px; font-size:11px; font-weight:600",
-            }, pos + String(entry.positionRank)));
-          }
-          if (value) {
-            chip.appendChild(el("span", {
-              style: "color:var(--muted); margin-left:6px; font-size:11px",
-            }, String(value)));
-          }
-          list.appendChild(chip);
-        });
-      sec.appendChild(list);
-      rosterCard.appendChild(sec);
+    // One column per position; columns ordered by the position group's total
+    // value, players ordered by value within each.
+    const cols = ["QB", "RB", "WR", "TE"]
+      .map(pos => {
+        const items = byPos[pos].sort((a, b) => b.value - a.value);
+        return { pos, items, total: items.reduce((s, x) => s + x.value, 0) };
+      })
+      .filter(c => c.items.length)
+      .sort((a, b) => b.total - a.total);
+    const posGrid = el("div", { class: "roster-pos-grid" });
+    cols.forEach(({ pos, items, total }) => {
+      const col = el("div", { class: "roster-pos-col" });
+      col.appendChild(el("div", { class: "roster-pos-head" },
+        el("span", { class: "pos-chip " + positionClass(pos) }, pos),
+        el("span", { class: "pct" }, items.length + " · " + Math.round(total).toLocaleString()),
+      ));
+      items.forEach(({ pl, value, posRank }) => {
+        const row = el("div", { class: "roster-pos-row" + (pl.rookie ? " is-rookie" : "") });
+        row.appendChild(el("span", { class: "rp-rank" }, posRank != null ? pos + posRank : "—"));
+        row.appendChild(el("span", { class: "rp-name" }, pl.name));
+        row.appendChild(el("span", { class: "rp-val" }, value ? value.toLocaleString() : "—"));
+        col.appendChild(row);
+      });
+      posGrid.appendChild(col);
     });
+    rosterCard.appendChild(posGrid);
   }
   rightCol.appendChild(rosterCard);
 

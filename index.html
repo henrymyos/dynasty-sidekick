@@ -4819,9 +4819,9 @@ function recordClass(rec) {
   return "";
 }
 
-// Head-to-head matrix card: rows = manager, columns = opponent, so each cell
-// is the row manager's record against the column manager (the transpose of
-// the sheet's column-oriented layout).
+// Head-to-head matrix card: each cell is the COLUMN manager's record against
+// the ROW manager — same orientation as the sheet (read a manager's column
+// top to bottom to see their record vs everyone).
 function buildH2HCard(title, names, matrix, totalRow, note) {
   const card = el("div", { class: "card" }, el("h2", {}, title));
   const table = el("table", { class: "hist-table" });
@@ -4830,10 +4830,10 @@ function buildH2HCard(title, names, matrix, totalRow, note) {
     ...names.map(n => el("th", {}, n)),
   )));
   const body = el("tbody");
-  names.forEach(mgr => {
+  names.forEach(opp => {
     body.appendChild(el("tr", {},
-      el("td", {}, mgr),
-      ...names.map(opp => {
+      el("td", {}, opp),
+      ...names.map(mgr => {
         if (opp === mgr) return el("td", { class: "diag" }, "—");
         const rec = (matrix[opp] || {})[mgr] || "";  // sheet: row=opponent, col=manager
         return el("td", { class: recordClass(rec) }, rec || "—");
@@ -5019,7 +5019,7 @@ function renderHistory() {
   // Card 3: all-time head-to-head.
   main.appendChild(buildH2HCard(
     "All-Time Head-to-Head", at.names, at.reg, null,
-    "Row manager's record against each column manager, all seasons" +
+    "Column manager's record against each row manager, all seasons" +
     (at.note ? " — " + at.note.toLowerCase() : "") + "."));
 
   // Card 4: playoff summary rows (byes, title-game results, championships).
@@ -5046,7 +5046,7 @@ function renderHistory() {
   if (Object.keys(at.po).length) {
     main.appendChild(buildH2HCard(
       "Playoff Head-to-Head", at.names, at.po, at.playoffTotal,
-      "Playoff games only — row manager's record against each column manager."));
+      "Playoff games only — column manager's record against each row manager."));
   }
 }
 

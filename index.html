@@ -379,6 +379,73 @@
     grid-template-columns: 1fr 1fr;
     gap: 16px;
   }
+  /* Sleeper-style draft board */
+  .draft-board-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .draft-board-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(86px, 1fr));
+    gap: 4px;
+    min-width: 1060px;
+  }
+  .db-head {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    text-align: center;
+    padding: 4px 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .db-cell {
+    border-radius: 6px;
+    padding: 5px 6px;
+    min-height: 46px;
+    background: var(--panel-2);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+  }
+  .db-cell.db-qb { background: rgba(224,102,102,0.28); }
+  .db-cell.db-rb { background: rgba(106,168,79,0.28); }
+  .db-cell.db-wr { background: rgba(60,120,216,0.28); }
+  .db-cell.db-te { background: rgba(246,178,107,0.28); }
+  .db-cell.db-future { background: transparent; border: 1px dashed var(--border); }
+  .db-cell.db-mine { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .db-cell.db-onclock { box-shadow: inset 0 0 0 2px var(--hit); animation: dbPulse 1.2s ease-in-out infinite; }
+  @keyframes dbPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .db-pickno {
+    font-size: 9px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    justify-content: space-between;
+    gap: 4px;
+  }
+  .db-pickno .db-by {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .db-player {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .db-owner {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   @media (max-width: 800px) {
     .draft-grid { grid-template-columns: 1fr; }
   }
@@ -4701,6 +4768,66 @@ function renderDraftWorkspace() {
     }
     main.appendChild(banner);
   }
+
+  // ===== Draft board (Sleeper-style grid) =====
+  function teamNameOf(rid) {
+    const r = d.rosters.find(x => x.roster_id === rid);
+    const u = r && d.users.find(uu => uu.user_id === r.owner_id);
+    return u ? canonicalOwnerName(u.team_name || u.display_name) : "—";
+  }
+  const boardCard = el("div", { class: "card" }, el("h2", {}, "Draft Board"));
+  const boardScroll = el("div", { class: "draft-board-scroll" });
+  const boardGrid = el("div", { class: "draft-board-grid" });
+  // Header row: slot number + the team originally drafting from that slot.
+  for (let slot = 1; slot <= 12; slot++) {
+    const origRoster = d.draft.slot_to_roster_id[slot];
+    boardGrid.appendChild(el("div", { class: "db-head" },
+      slot + " · " + (origRoster != null ? teamNameOf(origRoster) : "—")));
+  }
+  // One row per round; each cell = pick made or current pick owner.
+  const pickBySlot = {};
+  d.picks.forEach(p => { pickBySlot[p.round + ":" + p.draft_slot] = p; });
+  const totalRounds = d.draft.rounds || 3;
+  for (let rd = 1; rd <= totalRounds; rd++) {
+    for (let slot = 1; slot <= 12; slot++) {
+      const overall = (rd - 1) * 12 + slot;
+      const pickLabel = rd + "." + String(slot).padStart(2, "0");
+      const made = pickBySlot[rd + ":" + slot];
+      const currentOwner = ownerOfSlot(rd, slot);
+      const isMine = myRosterId != null && currentOwner === myRosterId;
+      const isOnClock = d.draft.status !== "complete" && overall === nextOverall;
+      if (made) {
+        const player = made.player_id ? d.players[made.player_id] : null;
+        const pos = player ? player.position : null;
+        const cellCls = "db-cell" + (pos ? " db-" + pos.toLowerCase() : "")
+          + (made.roster_id === myRosterId ? " db-mine" : "");
+        const cell = el("div", { class: cellCls });
+        const head = el("div", { class: "db-pickno" }, el("span", {}, pickLabel));
+        // Show the picking team when the pick was traded away from the slot's
+        // original owner (mirrors Sleeper's board).
+        const origRoster = d.draft.slot_to_roster_id[slot];
+        if (made.roster_id !== origRoster) {
+          head.appendChild(el("span", { class: "db-by" }, teamNameOf(made.roster_id)));
+        }
+        cell.appendChild(head);
+        cell.appendChild(el("div", { class: "db-player" },
+          player ? player.name : "Player " + made.player_id));
+        boardGrid.appendChild(cell);
+      } else {
+        const cellCls = "db-cell db-future" + (isMine ? " db-mine" : "") + (isOnClock ? " db-onclock" : "");
+        const cell = el("div", { class: cellCls });
+        cell.appendChild(el("div", { class: "db-pickno" }, el("span", {}, pickLabel)));
+        cell.appendChild(el("div", { class: "db-owner" },
+          currentOwner != null ? teamNameOf(currentOwner) : "—"));
+        boardGrid.appendChild(cell);
+      }
+    }
+  }
+  boardScroll.appendChild(boardGrid);
+  boardCard.appendChild(boardScroll);
+  boardCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
+    "Columns are draft slots with the original slot owner; cells show the player taken (colored by position, picker noted when the pick was traded) or, for upcoming picks, whoever currently owns the pick. Your picks are outlined; the green pulse is on the clock."));
+  main.appendChild(boardCard);
 
   // Combined ranking: 70% Flock expert avg rank + 30% KTC rookie rank.
   // Both sources rank rookies 1..N (lower = better). When a rookie is only in

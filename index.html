@@ -5136,19 +5136,55 @@ function renderDraftWorkspace() {
   if (!myRoster || !myRoster.players.length) {
     rosterCard.appendChild(el("div", { class: "empty" }, "No roster found."));
   } else {
+    // Per-player position ranks derived from the same KTC value feed we
+    // display — sort every KTC player within his position by superflex value
+    // and rank 1..N. Self-consistent with the values on the tiles (the feed's
+    // own positionalRank field disagreed with its values for some players).
+    const derivedPosRank = {};
+    {
+      const byPosAll = { QB: [], RB: [], WR: [], TE: [] };
+      Object.entries(dyn).forEach(([norm, e]) => {
+        if (e && byPosAll[e.position]) byPosAll[e.position].push({ norm, value: e.value || 0 });
+      });
+      Object.values(byPosAll).forEach(arr => {
+        arr.sort((a, b) => b.value - a.value);
+        arr.forEach((e, i) => { derivedPosRank[e.norm] = i + 1; });
+      });
+    }
+    // League-relative position-group ranks (what KTC's league analyzer shows):
+    // total KTC value per position per roster, ranked across the league.
+    const groupValueByRoster = {};
+    d.rosters.forEach(r => {
+      const g = { QB: 0, RB: 0, WR: 0, TE: 0 };
+      (r.players || []).forEach(pid => {
+        const p = d.players[pid];
+        if (!p || !(p.position in g)) return;
+        const e = dyn[ktcNorm(p.name)];
+        g[p.position] += e ? (e.value || 0) : 0;
+      });
+      groupValueByRoster[r.roster_id] = g;
+    });
+    const leagueGroupRank = { QB: null, RB: null, WR: null, TE: null };
+    ["QB", "RB", "WR", "TE"].forEach(pos => {
+      const sorted = d.rosters.slice().sort((a, b) =>
+        groupValueByRoster[b.roster_id][pos] - groupValueByRoster[a.roster_id][pos]);
+      const idx = sorted.findIndex(r => r.roster_id === myRoster.roster_id);
+      leagueGroupRank[pos] = idx >= 0 ? idx + 1 : null;
+    });
+
     const byPos = { QB: [], RB: [], WR: [], TE: [] };
     myRoster.players.forEach(pid => {
       const p = d.players[pid];
       if (!p || !byPos[p.position]) return;
-      const entry = dyn[ktcNorm(p.name)];
+      const norm = ktcNorm(p.name);
+      const entry = dyn[norm];
       byPos[p.position].push({
         pl: p,
         value: entry ? (entry.value || 0) : 0,
-        posRank: entry && entry.positionRank != null ? entry.positionRank : null,
+        posRank: derivedPosRank[norm] != null ? derivedPosRank[norm] : null,
       });
     });
-    // One column per position; columns ordered by the position group's total
-    // value, players ordered by value within each.
+    // Columns ordered by group total value, then QB and WR swap places.
     const cols = ["QB", "RB", "WR", "TE"]
       .map(pos => {
         const items = byPos[pos].sort((a, b) => b.value - a.value);
@@ -5156,12 +5192,18 @@ function renderDraftWorkspace() {
       })
       .filter(c => c.items.length)
       .sort((a, b) => b.total - a.total);
+    const qbIdx = cols.findIndex(c => c.pos === "QB");
+    const wrIdx = cols.findIndex(c => c.pos === "WR");
+    if (qbIdx >= 0 && wrIdx >= 0) {
+      [cols[qbIdx], cols[wrIdx]] = [cols[wrIdx], cols[qbIdx]];
+    }
     const posGrid = el("div", { class: "roster-pos-grid" });
     cols.forEach(({ pos, items, total }) => {
       const col = el("div", { class: "roster-pos-col" });
       col.appendChild(el("div", { class: "roster-pos-head" },
         el("span", { class: "pos-chip " + positionClass(pos) }, pos),
-        el("span", { class: "pct" }, String(items.length)),
+        el("span", { class: "pct" },
+          (leagueGroupRank[pos] != null ? "#" + leagueGroupRank[pos] + " · " : "") + items.length),
       ));
       items.forEach(({ pl, value, posRank }) => {
         // Split into first / last so the tile stays narrow: first word is the

@@ -504,55 +504,65 @@
     color: var(--text);
   }
   .roster-chip.is-rookie { color: var(--accent); border: 1px solid rgba(88,166,255,0.4); }
-  /* Live Draft roster: one column per position */
+  /* Live Draft roster: 4 position columns of Sleeper-style player tiles */
   .roster-pos-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
   }
-  .roster-pos-col {
-    background: var(--panel-2);
-    border-radius: 8px;
-    padding: 8px;
-    min-width: 0;
-  }
+  .roster-pos-col { min-width: 0; }
   .roster-pos-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 6px;
+    gap: 4px;
     margin-bottom: 6px;
-    padding-bottom: 6px;
+    padding-bottom: 5px;
     border-bottom: 1px solid var(--border);
   }
-  .roster-pos-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 2px;
-    font-size: 12px;
+  .player-tile {
+    border-radius: 7px;
+    padding: 5px 7px;
+    margin-bottom: 5px;
+    background: var(--panel-2);
     min-width: 0;
   }
-  .roster-pos-row.is-rookie .rp-name { color: var(--accent); }
-  .rp-rank {
-    flex-shrink: 0;
-    min-width: 36px;
-    font-size: 10px;
+  .player-tile.pt-qb { background: rgba(224,102,102,0.22); }
+  .player-tile.pt-rb { background: rgba(106,168,79,0.22); }
+  .player-tile.pt-wr { background: rgba(60,120,216,0.22); }
+  .player-tile.pt-te { background: rgba(246,178,107,0.22); }
+  .player-tile.is-rookie { box-shadow: inset 0 0 0 1.5px rgba(88,166,255,0.55); }
+  .pt-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 4px;
+    font-size: 9px;
     font-weight: 700;
-    color: var(--accent);
+    color: var(--muted);
     font-variant-numeric: tabular-nums;
+    margin-bottom: 1px;
   }
-  .rp-name {
-    flex: 1;
+  .pt-first {
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.2;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .rp-val {
-    flex-shrink: 0;
-    font-size: 10px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
+  .pt-last {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (max-width: 640px) {
+    .roster-pos-grid { gap: 4px; }
+    .player-tile { padding: 4px 5px; }
+    .pt-last { font-size: 11px; }
   }
   .draft-pill {
     display: inline-block;
@@ -5151,14 +5161,24 @@ function renderDraftWorkspace() {
       const col = el("div", { class: "roster-pos-col" });
       col.appendChild(el("div", { class: "roster-pos-head" },
         el("span", { class: "pos-chip " + positionClass(pos) }, pos),
-        el("span", { class: "pct" }, items.length + " · " + Math.round(total).toLocaleString()),
+        el("span", { class: "pct" }, String(items.length)),
       ));
       items.forEach(({ pl, value, posRank }) => {
-        const row = el("div", { class: "roster-pos-row" + (pl.rookie ? " is-rookie" : "") });
-        row.appendChild(el("span", { class: "rp-rank" }, posRank != null ? pos + posRank : "—"));
-        row.appendChild(el("span", { class: "rp-name" }, pl.name));
-        row.appendChild(el("span", { class: "rp-val" }, value ? value.toLocaleString() : "—"));
-        col.appendChild(row);
+        // Split into first / last so the tile stays narrow: first word is the
+        // first name, everything after is the surname (handles "St. Brown").
+        const parts = pl.name.split(" ");
+        const first = parts[0];
+        const last = parts.slice(1).join(" ") || "";
+        const tile = el("div", {
+          class: "player-tile pt-" + pos.toLowerCase() + (pl.rookie ? " is-rookie" : ""),
+        });
+        tile.appendChild(el("div", { class: "pt-meta" },
+          el("span", {}, posRank != null ? pos + posRank : "—"),
+          el("span", {}, value ? value.toLocaleString() : ""),
+        ));
+        tile.appendChild(el("div", { class: "pt-first" }, first));
+        tile.appendChild(el("div", { class: "pt-last" }, last || " "));
+        col.appendChild(tile);
       });
       posGrid.appendChild(col);
     });

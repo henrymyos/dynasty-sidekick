@@ -2177,7 +2177,15 @@ function buildTierLegendCard() {
   // Collapsed by default: a slim card whose summary row expands into the full
   // star chart + glossary.
   const legendCard = el("div", { class: "card" });
+  // Persist the expanded/collapsed state across re-renders (data loads and
+  // filter clicks rebuild the DOM, which would otherwise snap it closed).
   const outer = el("details", {});
+  let legendOpen = false;
+  try { legendOpen = localStorage.getItem("dp.legendOpen") === "1"; } catch {}
+  if (legendOpen) outer.setAttribute("open", "");
+  outer.addEventListener("toggle", () => {
+    try { localStorage.setItem("dp.legendOpen", outer.open ? "1" : "0"); } catch {}
+  });
   outer.appendChild(el("summary", {
     style: "cursor:pointer; font-size: 15px; font-weight: 600; color: var(--text); user-select: none;",
   }, "Player Category Information"));

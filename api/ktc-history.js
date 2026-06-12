@@ -5,7 +5,9 @@
 
 const SNAPSHOTS = [
   { ts: "20201101092924", url: "https://www.keeptradecut.com/", label: "2020-11-01" },
-  { ts: "20210422033229", url: "https://keeptradecut.com/dynasty-rankings", label: "2021-04-22" },
+  // The 2021-04-22 dynasty-rankings capture has no playersArray; the May 14
+  // homepage capture is the nearest spring-2021 snapshot that parses.
+  { ts: "20210514172814", url: "https://keeptradecut.com/", label: "2021-05-14" },
   { ts: "20210724022232", url: "https://keeptradecut.com/dynasty-rankings", label: "2021-07-24" },
   { ts: "20220516093752", url: "https://keeptradecut.com/dynasty-rankings", label: "2022-05-16" },
   { ts: "20221114151715", url: "https://keeptradecut.com/dynasty-rankings", label: "2022-11-14" },

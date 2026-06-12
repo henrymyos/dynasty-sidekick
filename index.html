@@ -4368,16 +4368,20 @@ function scoreProjection(stats, scoring) {
 }
 
 
-// Pick the snapshot whose timestamp is closest to (but not after) the trade time.
-// Falls back to the earliest if the trade predates every snapshot we have.
+// Pick the snapshot whose timestamp is closest to (but not after) the trade
+// time, skipping snapshots that failed to parse (empty players map) — an
+// empty snapshot would price every piece at 0 and silently skip the trade.
+// Falls back to the earliest usable one if the trade predates everything.
 function snapshotForTradeTime(history, tradeMs) {
   if (!history || !history.snapshots) return null;
+  const usable = history.snapshots.filter(s => s.players && Object.keys(s.players).length);
+  if (!usable.length) return null;
   let chosen = null;
-  for (const s of history.snapshots) {
+  for (const s of usable) {
     if (s.timestamp_ms <= tradeMs) chosen = s;
     else break;
   }
-  return chosen || history.snapshots[0];
+  return chosen || usable[0];
 }
 
 // Average of the available Early/Mid/Late tiers for a {season, round} pick.

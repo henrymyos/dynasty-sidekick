@@ -142,6 +142,9 @@ export default async function handler(req, res) {
         type: d.type,
         status: d.status,
         created: d.created,
+        // A league can hold the NEXT year's rookie draft (created mid-season
+        // before renewal), so the draft's own season matters for grouping.
+        season: d.season || sd.league.season,
         rounds: d.settings && d.settings.rounds,
         slot_to_roster_id: d.slot_to_roster_id || {},
         picks: d.picks.map(p => ({

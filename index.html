@@ -6007,18 +6007,26 @@ function setStatus(kind, text) {
 }
 
 // Auto-graded rookie-draft picks for leagues without a hand-graded sheet.
-// Each pick is judged by the player's PEAK KTC value — the max across the
-// historical snapshots and today — so a pick that hit and then aged out still
-// counts as a hit. Picks from drafts less than ~a season old stay Pending;
-// their value is still mostly draft capital.
+// Calibrated against the home league's 205 hand grades (2020-2025): the model
+// below agrees with them 78.5% of the time, with almost no false Hits on
+// hand-graded Misses. Remaining disagreements are production-vs-market
+// judgment calls (e.g. Najee Harris: produced for years, value never popped).
 //
-// The bar scales with draft capital: an early first has to become a real
-// stud to count as a Hit, while a late third only has to become a useful
-// asset. Floors (4000 Hit / 2000 Meh) apply everywhere; round-1 picks face a
-// higher bar derived from what the slot itself was worth.
-const AUTO_HIT_FLOOR = 4000;
-const AUTO_MEH_FLOOR = 2000;
+// Grade value = geometric mean of (a) the player's peak KTC value measured at
+// least a YEAR after the draft — early peaks are just rookie hype echoing the
+// pick's cost — and (b) his current value. A pick must have both become good
+// and stayed relevant; year-2 hype mirages (Trey Lance, Zach Wilson) and
+// pure draft capital fade out, while aged-out hits keep peak credit.
+//
+// The bar also scales with draft capital: an early first has to become a
+// stud, a late third only a useful asset. Picks from drafts less than
+// ~a season old stay Pending; their value is still mostly draft capital.
+const AUTO_HIT_FLOOR = 4750;
+const AUTO_MEH_FLOOR = 3400;
+const AUTO_HIT_MULT = 1.1;
+const AUTO_MEH_MULT = 0.7;
 const AUTO_PENDING_MS = 350 * 24 * 60 * 60 * 1000;
+const AUTO_HYPE_MS = 365 * 24 * 60 * 60 * 1000;  // ignore peaks within a year of the draft
 
 // Rough KTC cost of a rookie slot (12-team-equivalent, linear within round).
 function autoSlotExpectation(round, pickInRound, nTeams) {
@@ -6031,8 +6039,8 @@ function autoSlotExpectation(round, pickInRound, nTeams) {
 function autoGradeThresholds(round, pickInRound, nTeams) {
   const exp = autoSlotExpectation(round, pickInRound, nTeams);
   return {
-    hit: Math.max(AUTO_HIT_FLOOR, Math.round(0.85 * exp)),
-    meh: Math.max(AUTO_MEH_FLOOR, Math.round(0.5 * exp)),
+    hit: Math.max(AUTO_HIT_FLOOR, Math.round(AUTO_HIT_MULT * exp)),
+    meh: Math.max(AUTO_MEH_FLOOR, Math.round(AUTO_MEH_MULT * exp)),
   };
 }
 
@@ -6045,25 +6053,57 @@ function buildAutoPicks() {
 
   const ktc = state.ktcDynasty.players || {};
   const snaps = useHistory ? (state.tradeHistory.snapshots || []) : [];
-  function peakValue(name) {
+  function currentValue(name) {
+    const e = ktc[ktcNormalizeName(name)];
+    return (e && e.value) || 0;
+  }
+  function peakValueAfter(name, afterMs) {
     const norm = ktcNormalizeName(name);
-    let v = (ktc[norm] && ktc[norm].value) || 0;
+    let v = currentValue(name);
     snaps.forEach(s => {
+      if (s.timestamp_ms != null && s.timestamp_ms < afterMs) return;
       const sv = s.players && s.players[norm];
       if (typeof sv === "number" && sv > v) v = sv;
     });
     return v;
   }
+  // See the calibration note above AUTO_HIT_FLOOR.
+  function gradeValue(name, draftCreated) {
+    const peak = peakValueAfter(name, (draftCreated || 0) + AUTO_HYPE_MS);
+    return Math.sqrt(peak * Math.max(currentValue(name), 1));
+  }
 
   const picks = [];
   const seasons = state.sleeper.seasons;
-  seasons.forEach((sd, idx) => {
-    if (idx === 0) return;  // first chain season = startup draft, not rookies
-    // The season's rookie draft: completed, has picks, fewest rounds (rookie
-    // drafts are short; startups run 20+ rounds).
-    const candidates = (sd.drafts || []).filter(d => d.picks && d.picks.length);
-    if (!candidates.length) return;
-    const draft = candidates.slice().sort((a, b) => (a.rounds || 99) - (b.rounds || 99))[0];
+  // Group drafts by the DRAFT's season, not the league's — Sleeper can attach
+  // next year's rookie draft to the current league before renewal. A year can
+  // also hold several drafts (vet drafts, supplemental rounds); the real
+  // rookie draft is the one whose first round carries the most total peak
+  // value (Burrow/Caleb/Jeanty classes dwarf vet-scrub boards).
+  function draftQuality(d) {
+    let s = 0;
+    d.picks.forEach(p => {
+      if (p.round !== 1 || !p.player_id) return;
+      const pl = state.sleeper.players[p.player_id];
+      if (pl) s += peakValueAfter(pl.name, 0);
+    });
+    return s;
+  }
+  const firstSeason = seasons[0] && seasons[0].season;
+  const byYear = {};  // draft season → { draft, sd, q }
+  seasons.forEach(sd => {
+    (sd.drafts || []).forEach(d => {
+      if (!d.picks || !d.picks.length) return;
+      const yr = d.season || sd.season;
+      if (yr === firstSeason) return;       // startup year
+      if ((d.rounds || 0) > 6) return;      // startup-sized draft
+      const q = draftQuality(d);
+      const cur = byYear[yr];
+      if (!cur || q > cur.q) byYear[yr] = { draft: d, sd, q };
+    });
+  });
+  Object.keys(byYear).sort().forEach(yr => {
+    const { draft, sd } = byYear[yr];
     const nTeams = sd.rosters.length || 12;
     const pending = draft.created && (Date.now() - draft.created) < AUTO_PENDING_MS;
     draft.picks.forEach(p => {
@@ -6073,7 +6113,7 @@ function buildAutoPicks() {
       const pickInRound = p.pick_no - (p.round - 1) * nTeams;
       let result = null;  // null renders as Pending
       if (!pending) {
-        const v = peakValue(pl.name);
+        const v = gradeValue(pl.name, draft.created);
         const t = autoGradeThresholds(p.round, pickInRound, nTeams);
         result = v >= t.hit ? "Hit" : v >= t.meh ? "Meh" : "Miss";
       }
@@ -6086,7 +6126,7 @@ function buildAutoPicks() {
       }
       if (!owner) return;
       picks.push({
-        year: parseInt(sd.season, 10),
+        year: parseInt(yr, 10),
         round: p.round,
         pickInRound,
         slot: p.round + "." + String(pickInRound).padStart(2, "0"),

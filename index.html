@@ -6009,12 +6009,32 @@ function setStatus(kind, text) {
 // Auto-graded rookie-draft picks for leagues without a hand-graded sheet.
 // Each pick is judged by the player's PEAK KTC value — the max across the
 // historical snapshots and today — so a pick that hit and then aged out still
-// counts as a hit. Thresholds: 4000+ = Hit (became a real starter-level
-// asset), 2000+ = Meh (useful piece), below = Miss. Picks from drafts less
-// than ~a season old stay Pending; their value is still mostly draft capital.
-const AUTO_HIT_VALUE = 4000;
-const AUTO_MEH_VALUE = 2000;
+// counts as a hit. Picks from drafts less than ~a season old stay Pending;
+// their value is still mostly draft capital.
+//
+// The bar scales with draft capital: an early first has to become a real
+// stud to count as a Hit, while a late third only has to become a useful
+// asset. Floors (4000 Hit / 2000 Meh) apply everywhere; round-1 picks face a
+// higher bar derived from what the slot itself was worth.
+const AUTO_HIT_FLOOR = 4000;
+const AUTO_MEH_FLOOR = 2000;
 const AUTO_PENDING_MS = 350 * 24 * 60 * 60 * 1000;
+
+// Rough KTC cost of a rookie slot (12-team-equivalent, linear within round).
+function autoSlotExpectation(round, pickInRound, nTeams) {
+  const frac = nTeams > 1 ? (pickInRound - 1) / (nTeams - 1) : 0;  // 0 = first pick of round
+  if (round === 1) return 6800 - 2600 * frac;   // 1.01 ≈ 6800 → 1.12 ≈ 4200
+  if (round === 2) return 3400 - 1000 * frac;   // 2.01 ≈ 3400 → 2.12 ≈ 2400
+  if (round === 3) return 2000 - 500 * frac;    // 3.01 ≈ 2000 → 3.12 ≈ 1500
+  return 1200;
+}
+function autoGradeThresholds(round, pickInRound, nTeams) {
+  const exp = autoSlotExpectation(round, pickInRound, nTeams);
+  return {
+    hit: Math.max(AUTO_HIT_FLOOR, Math.round(0.85 * exp)),
+    meh: Math.max(AUTO_MEH_FLOOR, Math.round(0.5 * exp)),
+  };
+}
 
 function buildAutoPicks() {
   if (IS_DEFAULT_LEAGUE) return;
@@ -6054,7 +6074,8 @@ function buildAutoPicks() {
       let result = null;  // null renders as Pending
       if (!pending) {
         const v = peakValue(pl.name);
-        result = v >= AUTO_HIT_VALUE ? "Hit" : v >= AUTO_MEH_VALUE ? "Meh" : "Miss";
+        const t = autoGradeThresholds(p.round, pickInRound, nTeams);
+        result = v >= t.hit ? "Hit" : v >= t.meh ? "Meh" : "Miss";
       }
       let owner = null;
       const u = p.picked_by ? sd.users.find(x => x.user_id === p.picked_by) : null;

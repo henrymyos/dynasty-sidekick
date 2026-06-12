@@ -5174,6 +5174,25 @@ function renderHistory() {
 }
 
 // ---------- Live Draft workspace ----------
+// Snapshot override from KTC's league-analysis page (2026-06-12), home league
+// only. Our computed ranks drift slightly from KTC's because of name-matching
+// and timing; pin to their published table until it's re-verified. Used both
+// for the roster-column rank chips and the draft position-need ranks.
+const KTC_LEAGUE_POS_RANKS = {
+  "Henry":   { QB: 2,  RB: 1,  WR: 2,  TE: 4 },
+  "Ethan":   { QB: 1,  RB: 3,  WR: 1,  TE: 2 },
+  "Isaac":   { QB: 6,  RB: 2,  WR: 6,  TE: 7 },
+  "Seth":    { QB: 5,  RB: 4,  WR: 5,  TE: 8 },
+  "Paige":   { QB: 10, RB: 8,  WR: 4,  TE: 1 },
+  "Jacques": { QB: 7,  RB: 7,  WR: 3,  TE: 6 },
+  "Dave":    { QB: 4,  RB: 6,  WR: 8,  TE: 5 },
+  "Charlie": { QB: 3,  RB: 11, WR: 7,  TE: 11 },
+  "Simon":   { QB: 8,  RB: 5,  WR: 11, TE: 3 },
+  "John":    { QB: 9,  RB: 10, WR: 10, TE: 9 },
+  "Joseph":  { QB: 12, RB: 12, WR: 9,  TE: 10 },
+  "Jake":    { QB: 11, RB: 9,  WR: 12, TE: 12 },
+};
+
 async function loadDraftLive() {
   state.draft.loading = true;
   state.draft.error = null;
@@ -5590,20 +5609,32 @@ function renderDraftWorkspace() {
       teamValues[r.roster_id][pl.position] += v;
     });
   });
-  const leagueAvgValue = { QB: 0, RB: 0, WR: 0, TE: 0 };
-  Object.values(teamValues).forEach(v => POS_LIST.forEach(p => leagueAvgValue[p] += v[p]));
   const nTeams = d.rosters.length || 1;
-  POS_LIST.forEach(p => leagueAvgValue[p] /= nTeams);
 
-  const myValues = (myRosterId != null && teamValues[myRosterId]) || { QB: 0, RB: 0, WR: 0, TE: 0 };
-  // Boost = 1 + (deficit × 0.5), capped at 1.20× so KTC value still dominates
-  // and position-need only nudges close calls.
+  // Need is defined by LEAGUE RANK at each position (1 = most positional
+  // value): anything outside the top 4 is a need, and the boost grows the
+  // further outside it falls. A team ranked top 4 everywhere has no needs —
+  // every boost stays 1× and the recommendation is pure best-available.
+  const NEED_RANK_CUTOFF = 4;
+  const myPosRank = {};
+  POS_LIST.forEach(p => {
+    const sorted = d.rosters.slice().sort((a, b) => teamValues[b.roster_id][p] - teamValues[a.roster_id][p]);
+    const idx = myRosterId != null ? sorted.findIndex(r => r.roster_id === myRosterId) : -1;
+    myPosRank[p] = idx >= 0 ? idx + 1 : null;
+  });
+  // Home league: pin to KTC's published league-analysis ranks where available,
+  // so need matches the rank chips shown on the roster columns.
+  const pinnedRanks = IS_DEFAULT_LEAGUE ? KTC_LEAGUE_POS_RANKS[myName] : null;
+  if (pinnedRanks) POS_LIST.forEach(p => { if (pinnedRanks[p] != null) myPosRank[p] = pinnedRanks[p]; });
   const posBoost = {};
   POS_LIST.forEach(p => {
-    if (leagueAvgValue[p] <= 0) { posBoost[p] = 1; return; }
-    const deficit = (leagueAvgValue[p] - myValues[p]) / leagueAvgValue[p];
-    posBoost[p] = 1 + Math.max(0, Math.min(0.20, deficit * 0.5));
+    const rank = myPosRank[p];
+    if (rank == null || rank <= NEED_RANK_CUTOFF) { posBoost[p] = 1; return; }
+    // Rank 5 nudges (~1.06×); last place gets the full 1.20×.
+    const sev = (rank - NEED_RANK_CUTOFF) / Math.max(1, nTeams - NEED_RANK_CUTOFF);
+    posBoost[p] = 1 + Math.min(0.20, 0.06 + 0.14 * sev);
   });
+  const needPositions = POS_LIST.filter(p => posBoost[p] !== 1);
 
   function scoreFor(p) {
     if (state.draft.posMode) return p.value * (posBoost[p.position] || 1);
@@ -5647,13 +5678,11 @@ function renderDraftWorkspace() {
     if (!state.draft.ktcDynasty) {
       needLine.textContent = "Loading KTC dynasty values for team valuation…";
     } else {
-      needLine.textContent = "Your value vs league avg by position: " + POS_LIST.map(p => {
-        const me = Math.round(myValues[p]);
-        const avg = Math.round(leagueAvgValue[p]);
-        const delta = me - avg;
-        const sign = delta >= 0 ? "+" : "";
-        return `${p} ${me} (${sign}${delta} vs ${avg})`;
-      }).join("  ·  ");
+      const ranksTxt = POS_LIST.map(p => `${p} #${myPosRank[p] != null ? myPosRank[p] : "—"}`).join("  ·  ");
+      needLine.textContent = "Your league rank by position: " + ranksTxt +
+        (needPositions.length
+          ? `  —  needs (outside top ${NEED_RANK_CUTOFF}): ${needPositions.join(", ")}`
+          : `  —  top ${NEED_RANK_CUTOFF} at every position, taking best available`);
     }
     recCard.appendChild(needLine);
   }
@@ -5788,24 +5817,7 @@ function renderDraftWorkspace() {
       const idx = sorted.findIndex(r => r.roster_id === myRoster.roster_id);
       leagueGroupRank[pos] = idx >= 0 ? idx + 1 : null;
     });
-    // Snapshot override from KTC's league-analysis page (2026-06-12). Our
-    // computed ranks drift slightly from KTC's because of name-matching and
-    // timing; pin to their published table until it's re-verified.
-    const KTC_LEAGUE_POS_RANKS = {
-      "Henry":   { QB: 2,  RB: 1,  WR: 2,  TE: 4 },
-      "Ethan":   { QB: 1,  RB: 3,  WR: 1,  TE: 2 },
-      "Isaac":   { QB: 6,  RB: 2,  WR: 6,  TE: 7 },
-      "Seth":    { QB: 5,  RB: 4,  WR: 5,  TE: 8 },
-      "Paige":   { QB: 10, RB: 8,  WR: 4,  TE: 1 },
-      "Jacques": { QB: 7,  RB: 7,  WR: 3,  TE: 6 },
-      "Dave":    { QB: 4,  RB: 6,  WR: 8,  TE: 5 },
-      "Charlie": { QB: 3,  RB: 11, WR: 7,  TE: 11 },
-      "Simon":   { QB: 8,  RB: 5,  WR: 11, TE: 3 },
-      "John":    { QB: 9,  RB: 10, WR: 10, TE: 9 },
-      "Joseph":  { QB: 12, RB: 12, WR: 9,  TE: 10 },
-      "Jake":    { QB: 11, RB: 9,  WR: 12, TE: 12 },
-    };
-    const ktcOverride = KTC_LEAGUE_POS_RANKS[myName];
+    const ktcOverride = IS_DEFAULT_LEAGUE ? KTC_LEAGUE_POS_RANKS[myName] : null;
     if (ktcOverride) {
       ["QB", "RB", "WR", "TE"].forEach(pos => {
         if (ktcOverride[pos] != null) leagueGroupRank[pos] = ktcOverride[pos];

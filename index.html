@@ -1221,6 +1221,17 @@ function leagueIsSuperflex() {
   return rp.includes("SUPER_FLEX") || rp.filter(s => s === "QB").length >= 2;
 }
 
+// KTC value-scale query for this league: 1QB vs superflex, plus the TE-premium
+// tier matching the league's TE reception bonus (KTC models +0.5 / +1.0 / +1.5).
+function ktcDynastyQuery() {
+  let q = "format=" + (leagueIsSuperflex() ? "sf" : "1qb");
+  if (!IS_DEFAULT_LEAGUE && state.sleeper && state.sleeper.seasons.length) {
+    const bonus = state.sleeper.seasons[state.sleeper.seasons.length - 1].bonus_rec_te || 0;
+    if (bonus > 0) q += "&tep=" + (bonus <= 0.75 ? "tep" : bonus <= 1.25 ? "tepp" : "teppp");
+  }
+  return q;
+}
+
 // "My team" in a non-default league: claimed via the Live Draft "I am"
 // dropdown (stored per league). The default league is always Henry.
 const LS_MY_TEAM = "dp.myTeam." + LEAGUE_ID;
@@ -4249,8 +4260,7 @@ async function loadKtcDynasty() {
   state.ktcDynastyError = null;
   render();
   try {
-    const fmt = leagueIsSuperflex() ? "sf" : "1qb";
-    const res = await fetch("/api/ktc-dynasty?format=" + fmt, { cache: "no-store" });
+    const res = await fetch("/api/ktc-dynasty?" + ktcDynastyQuery(), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
@@ -4822,25 +4832,27 @@ function computeLeagueHistory() {
         entry.records[name] = w + "-" + l + (t ? "-" + t : "");
       }
     });
-    if (IS_DEFAULT_LEAGUE && next) {
-      // This league assigns next season's draft slots in reverse order of
-      // finish, which captures even the consolation placements the Sleeper
-      // bracket gets wrong. Verified against the league sheet for 2019-2025.
-      const draft = (next.drafts || []).find(d => d.slot_to_roster_id && Object.keys(d.slot_to_roster_id).length);
-      if (draft) {
-        const slots = Object.entries(draft.slot_to_roster_id);
-        const n = slots.length;
-        entry.teams = n;
-        slots.forEach(([slot, rid]) => {
-          const user = rosterToOwner(next, rid);
-          if (!user) return;
-          entry.finishes[canonicalUserName(user)] = n + 1 - parseInt(slot, 10);
-        });
-      }
+    // Primary method for every league: next season's draft slots are assigned
+    // in reverse order of finish, which captures even the consolation
+    // placements the Sleeper bracket gets wrong. Verified against the home
+    // league's sheet for 2019-2025.
+    const nextDraft = next
+      ? (next.drafts || []).find(d => d.slot_to_roster_id && Object.keys(d.slot_to_roster_id).length)
+      : null;
+    if (nextDraft) {
+      const slots = Object.entries(nextDraft.slot_to_roster_id);
+      const n = slots.length;
+      entry.teams = n;
+      slots.forEach(([slot, rid]) => {
+        const user = rosterToOwner(next, rid);
+        if (!user) return;
+        entry.finishes[canonicalUserName(user)] = n + 1 - parseInt(slot, 10);
+      });
     } else if (!IS_DEFAULT_LEAGUE) {
-      // Generic leagues: placement games (p:1 = title, p:3 = 3rd, …) from the
-      // winners bracket decide the playoff places; everyone else ranks by
-      // regular-season record, then points. Only complete seasons count.
+      // Fallback when no next-season draft exists yet (typically the latest
+      // completed season of a foreign league): placement games (p:1 = title,
+      // p:3 = 3rd, …) decide the playoff places; everyone else ranks by
+      // regular-season record, then points. Only decided titles count.
       const bracket = season.winners_bracket || [];
       const places = {};
       bracket.forEach(m => {
@@ -5082,9 +5094,8 @@ function renderHistory() {
   sTable.appendChild(sBody);
   standCard.appendChild(sTable);
   standCard.appendChild(el("div", { class: "hist-note" },
-    (IS_DEFAULT_LEAGUE
-      ? "Standings derived from the next season's rookie-draft order (reverse of finish). "
-      : "Playoff places from the bracket; non-playoff teams ranked by record, then points. ") +
+    "Standings derived from the next season's draft order (reverse of finish)" +
+    (IS_DEFAULT_LEAGUE ? ". " : "; the latest season falls back to the playoff bracket plus record. ") +
     "Gold / silver / bronze = top three, green = made playoffs, red = bottom three. " +
     (latestDone ? "" : "* Projected from current contender rankings.")));
   main.appendChild(standCard);
@@ -5173,7 +5184,7 @@ async function loadDraftLive() {
       fetch("/api/flock-live?_=" + Date.now(), { cache: "no-store" }),
     ];
     if (!state.draft.ktcDynasty) {
-      fetches.push(fetch("/api/ktc-dynasty?format=" + (leagueIsSuperflex() ? "sf" : "1qb"), { cache: "no-store" }));
+      fetches.push(fetch("/api/ktc-dynasty?" + ktcDynastyQuery(), { cache: "no-store" }));
     }
     const results = await Promise.all(fetches);
     const [draftRes, ktcRes, flockRes, dynRes] = results;
@@ -5228,16 +5239,13 @@ function ktcNorm(s) {
 }
 
 // Tabs are workspace-aware: each workspace has its own list. Non-default
-// leagues drop the Google-Sheet-driven tabs (Overview / Drafters / Stats),
-// which only exist for the home league.
+// leagues get the same draft-analytics tabs, fed by KTC-auto-graded picks
+// instead of the hand-graded Google Sheet.
 const WORKSPACE_TABS = {
-  drafts: IS_DEFAULT_LEAGUE ? [
+  drafts: [
     { view: "overview", label: "Overview" },
     { view: "leaderboard", label: "Drafters" },
     { view: "stats", label: "Stats" },
-    { view: "trades", label: "Trades" },
-    { view: "history", label: "History" },
-  ] : [
     { view: "trades", label: "Trades" },
     { view: "history", label: "History" },
   ],
@@ -5952,12 +5960,22 @@ function render() {
     return;
   }
 
-  // Drafts workspace requires sheet picks — but only for the sheet-driven
-  // tabs of the default league. Trades / History run off Sleeper data.
-  const SHEET_VIEWS = new Set(["overview", "leaderboard", "stats", "year", "person"]);
-  if (state.workspace === "drafts" && SHEET_VIEWS.has(state.view) && !state.picks.length) {
-    document.getElementById("main").innerHTML = '<div class="empty">No draft data available.</div>';
-    return;
+  // Drafts workspace requires picks data: the sheet at home, auto-graded
+  // Sleeper+KTC picks elsewhere. Trades / History run off Sleeper directly.
+  const PICK_VIEWS = new Set(["overview", "leaderboard", "stats", "year", "person"]);
+  if (state.workspace === "drafts" && PICK_VIEWS.has(state.view) && !state.picks.length) {
+    if (!IS_DEFAULT_LEAGUE) {
+      ensureSleeperLoaded();
+      ensureKtcDynastyLoaded();
+      ensureTradeHistoryLoaded();
+      buildAutoPicks();
+    }
+    if (!state.picks.length) {
+      document.getElementById("main").innerHTML = IS_DEFAULT_LEAGUE
+        ? '<div class="empty">No draft data available.</div>'
+        : '<div class="empty">Grading league draft history from KTC values…</div>';
+      return;
+    }
   }
 
   switch (state.view) {
@@ -5988,10 +6006,100 @@ function setStatus(kind, text) {
   txt.textContent = text;
 }
 
+// Auto-graded rookie-draft picks for leagues without a hand-graded sheet.
+// Each pick is judged by the player's PEAK KTC value — the max across the
+// historical snapshots and today — so a pick that hit and then aged out still
+// counts as a hit. Thresholds: 4000+ = Hit (became a real starter-level
+// asset), 2000+ = Meh (useful piece), below = Miss. Picks from drafts less
+// than ~a season old stay Pending; their value is still mostly draft capital.
+const AUTO_HIT_VALUE = 4000;
+const AUTO_MEH_VALUE = 2000;
+const AUTO_PENDING_MS = 350 * 24 * 60 * 60 * 1000;
+
+function buildAutoPicks() {
+  if (IS_DEFAULT_LEAGUE) return;
+  if (!state.sleeper || !state.ktcDynasty) return;
+  const useHistory = !!state.tradeHistory;
+  // Rebuild once the historical snapshots arrive so grades upgrade to peak.
+  if (state.picks.length && state.autoPicksUsedHistory === useHistory) return;
+
+  const ktc = state.ktcDynasty.players || {};
+  const snaps = useHistory ? (state.tradeHistory.snapshots || []) : [];
+  function peakValue(name) {
+    const norm = ktcNormalizeName(name);
+    let v = (ktc[norm] && ktc[norm].value) || 0;
+    snaps.forEach(s => {
+      const sv = s.players && s.players[norm];
+      if (typeof sv === "number" && sv > v) v = sv;
+    });
+    return v;
+  }
+
+  const picks = [];
+  const seasons = state.sleeper.seasons;
+  seasons.forEach((sd, idx) => {
+    if (idx === 0) return;  // first chain season = startup draft, not rookies
+    // The season's rookie draft: completed, has picks, fewest rounds (rookie
+    // drafts are short; startups run 20+ rounds).
+    const candidates = (sd.drafts || []).filter(d => d.picks && d.picks.length);
+    if (!candidates.length) return;
+    const draft = candidates.slice().sort((a, b) => (a.rounds || 99) - (b.rounds || 99))[0];
+    const nTeams = sd.rosters.length || 12;
+    const pending = draft.created && (Date.now() - draft.created) < AUTO_PENDING_MS;
+    draft.picks.forEach(p => {
+      if (!p.player_id) return;
+      const pl = state.sleeper.players[p.player_id];
+      if (!pl) return;
+      const pickInRound = p.pick_no - (p.round - 1) * nTeams;
+      let result = null;  // null renders as Pending
+      if (!pending) {
+        const v = peakValue(pl.name);
+        result = v >= AUTO_HIT_VALUE ? "Hit" : v >= AUTO_MEH_VALUE ? "Meh" : "Miss";
+      }
+      let owner = null;
+      const u = p.picked_by ? sd.users.find(x => x.user_id === p.picked_by) : null;
+      if (u) owner = canonicalOwnerName(userDisplay(u));
+      else {
+        const ru = rosterToOwner(sd, p.roster_id);
+        if (ru) owner = canonicalOwnerName(userDisplay(ru));
+      }
+      if (!owner) return;
+      picks.push({
+        year: parseInt(sd.season, 10),
+        round: p.round,
+        pickInRound,
+        slot: p.round + "." + String(pickInRound).padStart(2, "0"),
+        person: owner,
+        player: pl.name,
+        result,
+        color: null,
+        pos: ["QB", "RB", "WR", "TE"].includes(pl.position) ? pl.position : null,
+      });
+    });
+  });
+
+  state.picks = picks;
+  state.years = uniqueSorted(picks.map(p => p.year));
+  const mine = myTeamName();
+  state.people = uniqueSorted(picks.map(p => p.person))
+    .sort((a, b) => {
+      if (mine != null) {
+        if (a === mine && b !== mine) return -1;
+        if (b === mine && a !== mine) return 1;
+      }
+      return a.localeCompare(b);
+    });
+  state.autoPicksUsedHistory = useHistory;
+}
+
 async function loadData() {
-  // Non-default leagues have no Google Sheet; Sleeper data drives everything.
+  // Non-default leagues have no Google Sheet; the rookie-draft analytics are
+  // auto-graded from Sleeper drafts + KTC values instead.
   if (!IS_DEFAULT_LEAGUE) {
     ensureSleeperLoaded();
+    ensureKtcDynastyLoaded();
+    ensureTradeHistoryLoaded();
+    buildAutoPicks();
     state.lastUpdated = new Date();
     setStatus("ok", "Updated " + state.lastUpdated.toLocaleTimeString());
     render();

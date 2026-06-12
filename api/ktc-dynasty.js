@@ -38,14 +38,18 @@ function normalizeName(s) {
     .trim();
 }
 
-// Cached per value format: "sf" (superflex, the default) or "1qb", so any
-// league shape gets the right value scale.
-const caches = {};  // format → { data, at }
+// Cached per value scale: format "sf" (superflex, the default) or "1qb",
+// optionally with a TE-premium tier ("tep" +0.5 / "tepp" +1.0 / "teppp" +1.5
+// per TE reception) — KTC nests those values inside each format's object.
+const caches = {};  // format|tep → { data, at }
 const TTL_MS = 60 * 60 * 1000;  // 1 hour
+const TEP_LEVELS = new Set(["tep", "tepp", "teppp"]);
 
 export default async function handler(req, res) {
   const format = req.query && req.query.format === "1qb" ? "1qb" : "sf";
-  const hit = caches[format];
+  const tep = req.query && TEP_LEVELS.has(req.query.tep) ? req.query.tep : "";
+  const cacheKey = format + "|" + tep;
+  const hit = caches[cacheKey];
   if (hit && Date.now() - hit.at < TTL_MS) {
     res.setHeader("Cache-Control", "s-maxage=3600");
     res.json(hit.data);
@@ -76,7 +80,10 @@ export default async function handler(req, res) {
     }
     for (const p of players) {
       if (!p.playerName) continue;
-      const sf = (format === "1qb" ? p.oneQBValues : p.superflexValues) || {};
+      const base = (format === "1qb" ? p.oneQBValues : p.superflexValues) || {};
+      // TE-premium leagues read the nested tep/tepp/teppp object; entries
+      // without one (some pick assets) fall back to the base values.
+      const sf = (tep && base[tep] && base[tep].value != null) ? base[tep] : base;
       const val = sf.value || 0;
       if (p.position === "RDP" || p.position === "PICK") {
         const parsed = parsePickName(p.playerName);
@@ -94,8 +101,8 @@ export default async function handler(req, res) {
         rookie: !!p.rookie,
       };
     }
-    const data = { players: byName, picks, format, updated: Date.now() };
-    caches[format] = { data, at: Date.now() };
+    const data = { players: byName, picks, format, tep: tep || null, updated: Date.now() };
+    caches[cacheKey] = { data, at: Date.now() };
     res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
     res.json(data);
   } catch (e) {

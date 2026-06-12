@@ -4380,46 +4380,153 @@ function snapshotForTradeTime(history, tradeMs) {
   return chosen || history.snapshots[0];
 }
 
-// KTC pick value for a {season, round}. Average available Early/Mid/Late tiers.
-function lookupPickValue(snap, season, round) {
-  if (!snap || !snap.picks) return null;
+// Average of the available Early/Mid/Late tiers for a {season, round} pick.
+function avgPickValueFromMap(picksMap, season, round) {
+  if (!picksMap) return null;
   const tiers = ["early", "mid", "late"];
   let total = 0, count = 0;
   tiers.forEach(t => {
-    const v = snap.picks[`${season}|${t}|${round}`];
+    const v = picksMap[`${season}|${t}|${round}`];
     if (v && v > 0) { total += v; count++; }
   });
   return count > 0 ? total / count : null;
 }
+function lookupPickValue(snap, season, round) {
+  return snap ? avgPickValueFromMap(snap.picks, season, round) : null;
+}
 
-// Compute the value swing of a trade from the perspective of myRosterId.
-// Returns { mySent, myReceived, swing, snapshot }.
+// KTC-style trade fairness. KTC doesn't compare raw value sums: each piece
+// carries a hidden "raw adjustment" (10-42.4% of its value, exponential in
+// the value), and the trade is even when raw-adjustment sums match — which
+// is why one stud beats several mid pieces ("four quarters don't equal a
+// dollar"). Formula structure from public documentation of their method;
+// constants calibrated against a real KTC calculator example (predicts 3072
+// where KTC showed 3074). The favor amount returned is the KTC value of the
+// player the lighter side would need to add to even the trade.
+const RAW_ADJ = { BASE: 0.10, A: 0.22, B: 0.06, C: 0.0556 };
+function rawAdjValue(p, t, v) {
+  return p * (
+    RAW_ADJ.BASE +
+    RAW_ADJ.A * Math.pow(p / v, 8) +
+    RAW_ADJ.B * Math.pow(p / t, 1.3) +
+    RAW_ADJ.C * Math.pow(p / (v + 2000), 1.28)
+  );
+}
+// Signed favor: positive = the "got" side wins by a player worth this much.
+function tradeFavorAmount(gotVals, sentVals, vTop) {
+  if (!gotVals.length && !sentVals.length) return 0;
+  const t0 = Math.max(...gotVals, ...sentVals, 1);
+  const raw = vals => vals.reduce((s, p) => s + rawAdjValue(p, t0, vTop), 0);
+  const diff = raw(gotVals) - raw(sentVals);
+  if (Math.abs(diff) < 1) return 0;
+  // Binary-search the evening player's value (his own raw adjustment, with t
+  // re-derived in case he'd become the trade's best piece).
+  let lo = 0, hi = vTop;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    const tNew = Math.max(t0, mid);
+    const raw2 = vals => vals.reduce((s, p) => s + rawAdjValue(p, tNew, vTop), 0);
+    const gap = Math.abs(raw2(gotVals) - raw2(sentVals));
+    if (rawAdjValue(mid, tNew, vTop) < gap) lo = mid; else hi = mid;
+  }
+  return Math.sign(diff) * lo;
+}
+
+// Max player value in a price set (memoized per object identity).
+const _maxPriceCache = new WeakMap();
+function maxPriceIn(priceSet) {
+  if (_maxPriceCache.has(priceSet)) return _maxPriceCache.get(priceSet);
+  let v = 0;
+  Object.values(priceSet).forEach(e => {
+    const val = typeof e === "number" ? e : (e && e.value) || 0;
+    if (val > v) v = val;
+  });
+  v = v || 9999;
+  _maxPriceCache.set(priceSet, v);
+  return v;
+}
+
+// Projected Early/Mid/Late tier of a future pick from the ORIGINAL owner's
+// current contender rank (strong lineup → picks late). Memoized per KTC load.
+function projectedPickTier(originalRosterId) {
+  if (projectedPickTier._for !== state.ktcDynasty) {
+    const ranked = computeManagerRankings();
+    projectedPickTier._for = state.ktcDynasty;
+    projectedPickTier._ranks = null;
+    if (ranked) {
+      const map = {};
+      ranked.forEach(r => { map[r.roster_id] = r.cRank; });
+      projectedPickTier._ranks = { map, n: ranked.length };
+    }
+  }
+  const info = projectedPickTier._ranks;
+  if (!info) return "mid";
+  const r = info.map[originalRosterId];
+  if (r == null) return "mid";
+  if (r <= info.n / 3) return "late";
+  if (r <= (2 * info.n) / 3) return "mid";
+  return "early";
+}
+
+// Value swing of a trade from myRosterId's perspective, as KTC's calculator
+// would judge it. Trades newer than the last historical snapshot are priced
+// with LIVE KTC values (snapshots end before recent trades and go stale),
+// with future picks priced at their projected tier instead of the tier
+// average. The swing is the consolidation-adjusted favor amount.
 function evaluateTrade(trade, myRosterId, history, sleeperPlayers) {
-  if (!history || !sleeperPlayers) return null;
-  const snap = snapshotForTradeTime(history, trade.created);
-  if (!snap) return null;
-  let mySent = 0, myReceived = 0;
+  if (!sleeperPlayers) return null;
+  const snaps = (history && history.snapshots) || [];
+  const lastSnapMs = snaps.length ? snaps[snaps.length - 1].timestamp_ms : 0;
+  const live = trade.created > lastSnapMs && state.ktcDynasty && state.ktcDynasty.players;
+  let priceName, pricePick, label, priceSet;
+  if (live) {
+    const dyn = state.ktcDynasty.players;
+    const picksMap = state.ktcDynasty.picks || {};
+    priceName = n => { const e = dyn[ktcNormalizeName(n)]; return e ? (e.value || 0) : 0; };
+    pricePick = dp => {
+      const tier = projectedPickTier(dp.roster_id);
+      return picksMap[`${dp.season}|${tier}|${dp.round}`]
+        || avgPickValueFromMap(picksMap, dp.season, dp.round) || 0;
+    };
+    label = "current";
+    priceSet = dyn;
+  } else {
+    const snap = snapshotForTradeTime(history, trade.created);
+    if (!snap) return null;
+    priceName = n => snap.players[ktcNormalizeName(n)] || 0;
+    pricePick = dp => lookupPickValue(snap, dp.season, dp.round) || 0;
+    label = snap.label;
+    priceSet = snap.players;
+  }
+  const got = [], sent = [];
   Object.entries(trade.adds || {}).forEach(([pid, rid]) => {
     if (rid !== myRosterId) return;
     const sp = sleeperPlayers[pid];
     if (!sp) return;
-    const v = snap.players[ktcNormalizeName(sp.name)];
-    if (v) myReceived += v;
+    const v = priceName(sp.name);
+    if (v) got.push(v);
   });
   Object.entries(trade.drops || {}).forEach(([pid, rid]) => {
     if (rid !== myRosterId) return;
     const sp = sleeperPlayers[pid];
     if (!sp) return;
-    const v = snap.players[ktcNormalizeName(sp.name)];
-    if (v) mySent += v;
+    const v = priceName(sp.name);
+    if (v) sent.push(v);
   });
   (trade.draft_picks || []).forEach(dp => {
-    const v = lookupPickValue(snap, dp.season, dp.round);
+    const v = pricePick(dp);
     if (!v) return;
-    if (dp.owner_id === myRosterId) myReceived += v;
-    if (dp.previous_owner_id === myRosterId) mySent += v;
+    if (dp.owner_id === myRosterId) got.push(v);
+    if (dp.previous_owner_id === myRosterId) sent.push(v);
   });
-  return { mySent: Math.round(mySent), myReceived: Math.round(myReceived), swing: Math.round(myReceived - mySent), snapshot: snap.label };
+  if (!got.length && !sent.length) return null;
+  const swing = Math.round(tradeFavorAmount(got, sent, maxPriceIn(priceSet)));
+  return {
+    mySent: Math.round(sent.reduce((a, b) => a + b, 0)),
+    myReceived: Math.round(got.reduce((a, b) => a + b, 0)),
+    swing,
+    snapshot: label,
+  };
 }
 
 // Same normalization as /api/ktc.js — keep in sync for joins to work.
@@ -4659,7 +4766,7 @@ function renderTrades() {
       const sign = swing >= 0 ? "+" : "";
       const tag = el("span", {
         class: "trade-value-tag " + (swing >= 0 ? "delta-pos" : "delta-neg"),
-        title: `Got ${evalResult.myReceived} · Gave ${evalResult.mySent} (KTC ${evalResult.snapshot})`,
+        title: `Got ${evalResult.myReceived} · Gave ${evalResult.mySent} (KTC ${evalResult.snapshot}, consolidation-adjusted)`,
       }, `${sign}${swing} KTC`);
       header.appendChild(tag);
     }

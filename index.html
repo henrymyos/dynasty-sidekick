@@ -197,7 +197,11 @@
     border-bottom: 1px solid var(--border);
   }
   .round-header:first-child { margin-top: 0; }
-  .pick-row {
+  .round-header.clickable { cursor: pointer; }
+  .round-header.clickable:hover { color: var(--text); border-bottom-color: var(--accent); }
+  .round-header .rh-total { color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
+  .round-header.empty-cat { opacity: 0.55; }
+  .round-header.empty-cat .rh-none { font-style: italic; }
     display: grid;
     grid-template-columns: 110px 1fr 70px;
     gap: 12px;
@@ -2703,27 +2707,10 @@ function renderRosters() {
     assetsForRoster(r.roster_id).forEach(a => leaguePool.push(Object.assign({ owner }, a)));
   });
 
-  // League-wide total per individual tier, for the "N of TOTAL" breakdown.
+  // League-wide total per individual tier, for the "N of TOTAL" header.
   const leagueTierTotals = {};
   TIER_ORDER.forEach(t => { leagueTierTotals[t] = 0; });
   leaguePool.forEach(a => { if (a.tier && leagueTierTotals[a.tier.label] != null) leagueTierTotals[a.tier.label]++; });
-
-  // Lede: each of the 12 categories the league has, showing this roster's count
-  // out of the league-wide total. Each is clickable to see everyone in it.
-  const lede = el("div", { class: "card-lede" });
-  let firstTier = true;
-  TIER_ORDER.forEach(tier => {
-    const total = leagueTierTotals[tier];
-    if (!total) return;  // category nobody in the league has
-    if (!firstTier) lede.appendChild(el("span", {}, "  ·  "));
-    firstTier = false;
-    lede.appendChild(el("span", {
-      class: "lede-link",
-      title: "See all " + tier + " players in the league",
-      onclick: () => showCategoryModal(tier),
-    }, tier + " ", el("strong", {}, String(counts[tier])), " of " + total));
-  });
-  rosterCard.appendChild(lede);
 
   // Modal: every league-wide player in a single tier, best value first, each
   // row showing the player, value, and owner. The selected roster's own
@@ -2749,10 +2736,25 @@ function renderRosters() {
     if (!inTier.length) body.appendChild(el("div", { class: "empty" }, "No players in this category."));
     openModal(tier + " — " + inTier.length + " league-wide", body);
   }
+
+  // One section per category: a clickable "Tier (mine of total)" header — shown
+  // even when this roster has none, so you can see how many exist league-wide —
+  // followed by this roster's assets in that tier.
   TIER_ORDER.forEach(tier => {
+    const total = leagueTierTotals[tier];
+    if (!total) return;  // category nobody in the league has at all
+    const mine = counts[tier];
     const tierAssets = myAssets.filter(a => a.tier.label === tier).sort((a, b) => b.value - a.value);
-    if (!tierAssets.length) return;
-    rosterCard.appendChild(el("div", { class: "round-header" }, tier + " (" + tierAssets.length + ")"));
+    const header = el("div", {
+      class: "round-header clickable" + (mine ? "" : " empty-cat"),
+      title: "See all " + tier + " players in the league",
+      onclick: () => showCategoryModal(tier),
+    }, tier + " ", el("span", { class: "rh-total" }, "(" + mine + " of " + total + ")"));
+    rosterCard.appendChild(header);
+    if (!tierAssets.length) {
+      header.appendChild(el("span", { class: "rh-none" }, "  —  none on this roster"));
+      return;
+    }
     tierAssets.forEach(a => {
       const valueBits = [];
       if (a.ktc) valueBits.push("KTC " + a.ktc.toLocaleString());

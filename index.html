@@ -2334,7 +2334,10 @@ function classifyAsset(ktcValue, position, age, playerId) {
       else if (position === "RB" && ktcValue < 3500) label = "Serviceable";
       else label = "Productive Vet";
     }
-    else if (ktcValue >= 2000) label = "Short Term Production";
+    // Old QBs still starting (or one snap away) produce now despite minimal
+    // dynasty value — Rodgers (1963), Cousins (1944), Geno — so they read
+    // Short Term Production on a lower floor than other positions.
+    else if (ktcValue >= 2000 || (position === "QB" && ktcValue >= 1500)) label = "Short Term Production";
     else if (ktcValue >= 1300) label = "Jag - Insurance";
     else label = "Replaceable";
   } else if (ktcValue >= 6600) {
@@ -2368,10 +2371,12 @@ function classifyAsset(ktcValue, position, age, playerId) {
     label = "Replaceable";
   }
 
-  // Depth-chart override for QBs: a backup (depth_chart_order >= 2) isn't a
-  // weekly producer no matter his age or value — Justin Fields / Mac Jones
-  // types read Upside Shot, not production tiers or Serviceable.
-  if (position === "QB" && spInfo && typeof spInfo.depth_chart_order === "number" && spInfo.depth_chart_order >= 2) {
+  // Depth-chart override for QBs: a young/prime backup (depth_chart_order >= 2)
+  // isn't a weekly producer — Justin Fields / Mac Jones types read Upside Shot,
+  // not production tiers or Serviceable. Old backup vets (Cousins) are exempt:
+  // they have no upside but still produce when called, so they keep their
+  // Short Term Production label.
+  if (band !== "old" && position === "QB" && spInfo && typeof spInfo.depth_chart_order === "number" && spInfo.depth_chart_order >= 2) {
     const PRODUCTION_TIERS = new Set([
       "Mainstay", "Productive Vet", "Short Term Production", "Short Term League Winner", "Serviceable",
     ]);

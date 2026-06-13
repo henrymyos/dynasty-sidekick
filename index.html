@@ -2360,7 +2360,10 @@ function classifyAsset(ktcValue, position, age, playerId) {
     label = aging ? "Short Term Production"
           : (yearsExp != null && yearsExp >= 4 ? "Serviceable" : "Upside Shot");
   } else if (ktcValue >= 1300) {
-    label = band === "young" ? "Jag - Developmental" : "Serviceable";
+    // Below 2000 KTC there's no real bench value left — young players are
+    // developmental jags, everyone else is insurance. Never "Serviceable"
+    // (that tier is reserved for 2000+ known commodities like Ferguson/Doubs).
+    label = band === "young" ? "Jag - Developmental" : "Jag - Insurance";
   } else {
     label = "Replaceable";
   }

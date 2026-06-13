@@ -5285,6 +5285,20 @@ function renderHistory() {
 }
 
 // ---------- Live Draft workspace ----------
+// A roster's strength at a position weights its best player fully and each
+// additional body with diminishing returns (geometric decay), not a flat sum
+// of every player. This matches KTC's league-analysis positional ranks: one
+// elite QB outranks a pile of backups, and trading away a depth piece barely
+// moves you while trading your starter drops you a lot. Decay 0.7 reproduces
+// KTC's published ranks far better than a raw sum (44/48 vs 35/48 within one
+// rank) and gives the ranks Henry sees on KTC's site.
+const POS_DEPTH_DECAY = 0.7;
+function decayedPositionalValue(valuesDesc) {
+  let s = 0;
+  for (let i = 0; i < valuesDesc.length; i++) s += valuesDesc[i] * Math.pow(POS_DEPTH_DECAY, i);
+  return s;
+}
+
 async function loadDraftLive() {
   state.draft.loading = true;
   state.draft.error = null;
@@ -5687,19 +5701,28 @@ function renderDraftWorkspace() {
   });
 
   // Position-need calculation. Value each roster's players using KTC superflex
-  // dynasty values per position, then compare against the league average.
+  // dynasty values per position, weighting starters over depth (see
+  // decayedPositionalValue), then rank each roster in the league.
   const POS_LIST = ["QB", "RB", "WR", "TE"];
   const dyn = (state.draft.ktcDynasty && state.draft.ktcDynasty.players) || {};
-  const teamValues = {};   // roster_id -> { QB: total_value, RB:, WR:, TE: }
+  // Sorted (desc) KTC values per position per roster — the raw material for
+  // both the decayed strength score and the draft projection.
+  const teamPosValues = {};
   d.rosters.forEach(r => {
-    teamValues[r.roster_id] = { QB: 0, RB: 0, WR: 0, TE: 0 };
+    const arrs = { QB: [], RB: [], WR: [], TE: [] };
     (r.players || []).forEach(pid => {
       const pl = d.players[pid];
       if (!pl || !POS_LIST.includes(pl.position)) return;
       const ktcEntry = dyn[ktcNorm(pl.name)];
-      const v = ktcEntry ? (ktcEntry.value || 0) : 0;
-      teamValues[r.roster_id][pl.position] += v;
+      arrs[pl.position].push(ktcEntry ? (ktcEntry.value || 0) : 0);
     });
+    POS_LIST.forEach(p => arrs[p].sort((a, b) => b - a));
+    teamPosValues[r.roster_id] = arrs;
+  });
+  const teamValues = {};   // roster_id -> { QB: decayedScore, RB:, WR:, TE: }
+  d.rosters.forEach(r => {
+    teamValues[r.roster_id] = {};
+    POS_LIST.forEach(p => { teamValues[r.roster_id][p] = decayedPositionalValue(teamPosValues[r.roster_id][p]); });
   });
   const nTeams = d.rosters.length || 1;
 
@@ -5886,22 +5909,12 @@ function renderDraftWorkspace() {
       });
     }
     // League-relative position-group ranks (what KTC's league analyzer shows):
-    // total KTC value per position per roster, ranked across the league.
-    const groupValueByRoster = {};
-    d.rosters.forEach(r => {
-      const g = { QB: 0, RB: 0, WR: 0, TE: 0 };
-      (r.players || []).forEach(pid => {
-        const p = d.players[pid];
-        if (!p || !(p.position in g)) return;
-        const e = dyn[ktcNorm(p.name)];
-        g[p.position] += e ? (e.value || 0) : 0;
-      });
-      groupValueByRoster[r.roster_id] = g;
-    });
+    // the same starter-weighted positional strength used for need, ranked
+    // across the league.
     const leagueGroupRank = { QB: null, RB: null, WR: null, TE: null };
     ["QB", "RB", "WR", "TE"].forEach(pos => {
       const sorted = d.rosters.slice().sort((a, b) =>
-        groupValueByRoster[b.roster_id][pos] - groupValueByRoster[a.roster_id][pos]);
+        teamValues[b.roster_id][pos] - teamValues[a.roster_id][pos]);
       const idx = sorted.findIndex(r => r.roster_id === myRoster.roster_id);
       leagueGroupRank[pos] = idx >= 0 ? idx + 1 : null;
     });
@@ -5968,21 +5981,26 @@ function renderDraftWorkspace() {
     ),
   );
 
-  // Build the projection by iterating through remaining picks.
-  const projValues = {};
-  Object.entries(teamValues).forEach(([rid, v]) => { projValues[rid] = { ...v }; });
+  // Build the projection by iterating through remaining picks. Clone the
+  // sorted per-position value arrays so the decayed strength stays correct as
+  // the simulation inserts each drafted player.
+  const projArrays = {};
+  Object.entries(teamPosValues).forEach(([rid, a]) => {
+    projArrays[rid] = { QB: a.QB.slice(), RB: a.RB.slice(), WR: a.WR.slice(), TE: a.TE.slice() };
+  });
   const remaining = availablePool.slice();
 
   // Same rank-based need as the recommendation: outside the top 4 at a
-  // position = need. Ranks recompute from projValues, so they shift as the
-  // simulation hands out players.
+  // position = need. Decayed strength recomputes from projArrays, so ranks
+  // shift as the simulation hands out players.
   function boostForRoster(rid) {
     const boost = {};
-    const rosterIds = Object.keys(projValues);
+    const rosterIds = Object.keys(projArrays);
     POS_LIST.forEach(p => {
-      const sorted = rosterIds.slice().sort((a, b) => (projValues[b][p] || 0) - (projValues[a][p] || 0));
-      const rank = sorted.indexOf(String(rid)) + 1;
-      if (rank <= NEED_RANK_CUTOFF) { boost[p] = 1; return; }  // includes not-found (rank 0)
+      const scoreOf = id => decayedPositionalValue(projArrays[id][p] || []);
+      const myScore = scoreOf(rid);
+      const rank = rosterIds.reduce((n, id) => n + (scoreOf(id) > myScore ? 1 : 0), 1);
+      if (rank <= NEED_RANK_CUTOFF) { boost[p] = 1; return; }
       const sev = (rank - NEED_RANK_CUTOFF) / Math.max(1, rosterIds.length - NEED_RANK_CUTOFF);
       boost[p] = 1 + Math.min(0.20, 0.06 + 0.14 * sev);
     });
@@ -6005,8 +6023,16 @@ function renderDraftWorkspace() {
     }
     if (bestIdx < 0) break;
     const pick = remaining.splice(bestIdx, 1)[0];
-    if (!projValues[rosterId]) projValues[rosterId] = { QB: 0, RB: 0, WR: 0, TE: 0 };
-    projValues[rosterId][pick.position] = (projValues[rosterId][pick.position] || 0) + pick.value;
+    if (!projArrays[rosterId]) projArrays[rosterId] = { QB: [], RB: [], WR: [], TE: [] };
+    const arr = projArrays[rosterId][pick.position] || (projArrays[rosterId][pick.position] = []);
+    // Insert the drafted rookie's real KTC dynasty value (same scale as the
+    // roster arrays) into the sorted (desc) array so decayed strength updates
+    // correctly; fall back to the rank-based score if KTC has no value yet.
+    const dynEntry = dyn[ktcNorm(pick.name)];
+    const insVal = dynEntry && dynEntry.value ? dynEntry.value : pick.value;
+    let ins = arr.findIndex(v => v < insVal);
+    if (ins < 0) ins = arr.length;
+    arr.splice(ins, 0, insVal);
     projection.push({ overall, round, slot, rosterId, player: pick });
   }
 

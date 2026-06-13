@@ -2371,18 +2371,24 @@ function classifyAsset(ktcValue, position, age, playerId) {
     label = "Replaceable";
   }
 
-  // Depth-chart override for QBs: a young/prime backup (depth_chart_order >= 2)
-  // isn't a weekly producer — Justin Fields / Mac Jones types read Upside Shot,
-  // not production tiers or Serviceable. Old backup vets (Cousins) are exempt:
-  // they have no upside but still produce when called, so they keep their
-  // Short Term Production label.
-  if (band !== "old" && position === "QB" && spInfo && typeof spInfo.depth_chart_order === "number" && spInfo.depth_chart_order >= 2) {
+  // Depth-chart override for QBs: a backup (depth_chart_order >= 2) isn't a
+  // weekly producer. Young/prime backups (Justin Fields, Mac Jones) read
+  // Upside Shot. Old backups (Kirk Cousins behind a starter) have no upside
+  // either, so they drop to an insurance jag — only an old QB who is QB1
+  // (depth 1) keeps Short Term Production, and one flips automatically if his
+  // depth-chart slot changes.
+  if (position === "QB" && spInfo && typeof spInfo.depth_chart_order === "number" && spInfo.depth_chart_order >= 2) {
     const PRODUCTION_TIERS = new Set([
       "Mainstay", "Productive Vet", "Short Term Production", "Short Term League Winner", "Serviceable",
     ]);
     const ELITE_TIERS = new Set(["Cornerstone", "Foundational"]);
-    if (PRODUCTION_TIERS.has(label)) label = "Upside Shot";
-    else if (ELITE_TIERS.has(label)) label = "Upside Premier";
+    if (band === "old") {
+      if (PRODUCTION_TIERS.has(label)) label = "Jag - Insurance";
+    } else if (PRODUCTION_TIERS.has(label)) {
+      label = "Upside Shot";
+    } else if (ELITE_TIERS.has(label)) {
+      label = "Upside Premier";
+    }
   }
   return Object.assign({ label }, DD_TIER_INFO[label]);
 }

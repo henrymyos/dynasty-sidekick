@@ -242,23 +242,6 @@
   tr.row-clickable { cursor: pointer; }
   td.cell-clickable { cursor: pointer; }
   td.cell-clickable:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
-
-  /* "Every pick" strip: one colored cell per pick, by year */
-  .pick-strip-year { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
-  .pick-strip-label { width: 44px; flex-shrink: 0; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .pick-strip { display: flex; flex-wrap: wrap; gap: 3px; }
-  .pick-cell {
-    width: 16px; height: 16px; border-radius: 3px; cursor: pointer;
-    border: 1px solid rgba(255,255,255,0.06);
-  }
-  .pick-cell:hover { outline: 1px solid var(--accent); outline-offset: 1px; }
-  .pc-hit { background: var(--hit); }
-  .pc-meh { background: var(--meh); }
-  .pc-miss { background: var(--miss); }
-  .pc-pending { background: var(--pending); }
-  .strip-legend { display: flex; gap: 14px; margin-top: 10px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
-  .strip-legend span { display: inline-flex; align-items: center; gap: 5px; }
-  .strip-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
   table {
     width: 100%;
     border-collapse: collapse;
@@ -3702,14 +3685,6 @@ function renderAllPlayers() {
   main.appendChild(listCard);
 }
 
-// Result chip color for the "every pick" strip cells.
-function pickCellClass(result) {
-  if (result === "Hit") return "pc-hit";
-  if (result === "Meh") return "pc-meh";
-  if (result === "Miss") return "pc-miss";
-  return "pc-pending";
-}
-
 // Drill-down modal: every pick in a group (a row/cell of any hit-rate table),
 // listed in order of draft year, then draft slot. Shows slot, player,
 // position, drafter, and result.
@@ -3749,36 +3724,58 @@ function renderStats() {
   const main = document.getElementById("main");
   main.innerHTML = "";
 
-  // ----- Every pick made (visual strip, colored by result) -----
+  // ----- Every pick slot (1.01 … 3.12) aggregated across all years -----
   main.appendChild(el("div", { class: "section-header" }, "Every Pick",
-    el("span", { class: "section-sub" }, "Each cell is one pick — click any to see who it was")));
-  const stripCard = el("div", { class: "card" }, el("h2", {}, "Every Pick Made"));
-  const stripYears = state.years.slice().sort((a, b) => b - a);  // newest first
-  stripYears.forEach(y => {
-    const yp = state.picks
-      .filter(p => p.year === y && p.player)
-      .sort((a, b) => (a.round - b.round) || ((a.pickInRound || 0) - (b.pickInRound || 0)));
-    if (!yp.length) return;
-    const strip = el("div", { class: "pick-strip" });
-    yp.forEach(p => {
-      strip.appendChild(el("div", {
-        class: "pick-cell " + pickCellClass(p.result),
-        title: `${p.slot || ""} ${p.player} — ${p.result || "Pending"} (${p.person})`,
-        onclick: () => showPicksModal(`${p.slot || ""} ${p.player}`, [p]),
-      }));
-    });
-    stripCard.appendChild(el("div", { class: "pick-strip-year" },
-      el("div", { class: "pick-strip-label" }, String(y)),
-      strip,
-    ));
+    el("span", { class: "section-sub" }, "Hit rate of each exact draft slot across all years")));
+  const slotCard = el("div", { class: "card" }, el("h2", {}, "By Exact Pick"));
+  const slotTable = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", {}, "Pick"),
+      el("th", { class: "num" }, "Picks"),
+      el("th", { class: "num tight" }, "Hit"),
+      el("th", { class: "num tight" }, "Meh"),
+      el("th", { class: "num tight" }, "Miss"),
+      el("th", { class: "num tight gap-left" }, "Hit %"),
+      el("th", { class: "num tight" }, "Hit + Meh"),
+      el("th", { class: "mobile-hide" }, "Mix"),
+    )),
+  );
+  const slotBody = el("tbody", {});
+  // One row per (round, pickInRound) slot that exists in the data, aggregating
+  // every year. Picks-per-round = league size, so 10- and 12-team both work.
+  const maxPickByRound = {};
+  state.picks.forEach(p => {
+    if (!p.round || !p.pickInRound) return;
+    maxPickByRound[p.round] = Math.max(maxPickByRound[p.round] || 0, p.pickInRound);
   });
-  stripCard.appendChild(el("div", { class: "strip-legend" },
-    el("span", {}, el("i", { class: "pc-hit" }), "Hit"),
-    el("span", {}, el("i", { class: "pc-meh" }), "Meh"),
-    el("span", {}, el("i", { class: "pc-miss" }), "Miss"),
-    el("span", {}, el("i", { class: "pc-pending" }), "Pending"),
-  ));
-  main.appendChild(stripCard);
+  [1, 2, 3].forEach(rd => {
+    const maxPick = maxPickByRound[rd];
+    if (!maxPick) return;
+    for (let pir = 1; pir <= maxPick; pir++) {
+      const slotPicks = state.picks.filter(p => p.round === rd && p.pickInRound === pir);
+      if (!slotPicks.length) continue;
+      const t = tally(slotPicks);
+      const slot = rd + "." + String(pir).padStart(2, "0");
+      slotBody.appendChild(el("tr", {
+        class: "row-clickable",
+        onclick: () => showPicksModal("Pick " + slot, slotPicks),
+      },
+        el("td", {}, slot),
+        el("td", { class: "num" }, String(t.total)),
+        el("td", { class: "num tight" }, String(t.hit)),
+        el("td", { class: "num tight" }, String(t.meh)),
+        el("td", { class: "num tight" }, String(t.miss)),
+        el("td", { class: "num tight gap-left" }, formatPct(t.hit, t.graded)),
+        el("td", { class: "num tight" }, formatPct(t.hit + t.meh, t.graded)),
+        el("td", { class: "mobile-hide" }, renderBar(t)),
+      ));
+    }
+  });
+  slotTable.appendChild(slotBody);
+  slotCard.appendChild(slotTable);
+  slotCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
+    "Each row is one exact pick slot across every draft year. Click a row to see every player taken there, oldest first."));
+  main.appendChild(slotCard);
 
   // ----- Year × Round matrix -----
   main.appendChild(el("div", { class: "section-header" }, "League Overview",

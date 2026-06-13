@@ -4068,9 +4068,11 @@ function renderStats() {
       const base = "num tight" + (gap ? " gap-left" : "");
       const t = tally(picks);
       if (!t.graded) return el("td", { class: base }, "—");
+      // stopPropagation so a cell click shows only that round's picks, while a
+      // click anywhere else on the row shows the whole row's picks.
       return el("td", {
         class: base + " cell-clickable",
-        onclick: () => showPicksModal(state.statsInsightDrafter + " — " + title, picks),
+        onclick: (ev) => { ev.stopPropagation(); showPicksModal(state.statsInsightDrafter + " — " + title, picks); },
       },
         formatPct(t.hit, t.graded),
         el("span", { class: "pct", style: "margin-left:6px" }, "(" + t.total + ")"),
@@ -4080,8 +4082,12 @@ function renderStats() {
     ["QB", "RB", "WR", "TE"].forEach(pos => {
       const posPicks = drafterPicks.filter(p => p.pos === pos);
       if (!posPicks.length) return;
-      // Bold "Position — Total" header row
-      itbody.appendChild(el("tr", { class: "pos-total" },
+      // Bold "Position — Total" header row; clicking the row shows every pick
+      // this drafter made at that position.
+      itbody.appendChild(el("tr", {
+        class: "pos-total row-clickable",
+        onclick: () => showPicksModal(`${state.statsInsightDrafter} — ${pos} (all picks)`, posPicks),
+      },
         el("td", {},
           el("span", { class: "swatch", style: "background:" + POSITION_COLORS[pos] }),
           pos + " — Total"
@@ -4102,7 +4108,10 @@ function renderStats() {
           // Cells: this tier slot only fills under its own round column; the
           // other two round columns get a dash so the grid still reads cleanly.
           const cellTitle = `${pos} ${tier} Round ${rd} (${rd}.${slotRange})`;
-          itbody.appendChild(el("tr", { class: "pos-tier" },
+          itbody.appendChild(el("tr", {
+            class: "pos-tier row-clickable",
+            onclick: () => showPicksModal(`${state.statsInsightDrafter} — ${cellTitle}`, tierPicks),
+          },
             el("td", {}, `R${rd} ${tier} (${rd}.${slotRange})`),
             rd === 1 ? cellFor(tierPicks, cellTitle) : el("td", { class: "num tight" }, "—"),
             rd === 2 ? cellFor(tierPicks, cellTitle) : el("td", { class: "num tight" }, "—"),
@@ -4115,7 +4124,7 @@ function renderStats() {
     itable.appendChild(itbody);
     insightCard.appendChild(itable);
     insightCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
-      "Hit % per cell, pick count in parens. Bold rows show this drafter's total per round at each position; the indented sub-rows split each round into Early (.01–.04), Mid (.05–.08), and Late (.09–.12). The last column is the drafter's all-round total at that position."
+      "Hit % per cell, pick count in parens. Click a row to see every player this drafter took in it; click a single cell for just that round. Bold rows show this drafter's total per round at each position; the indented sub-rows split each round into Early (.01–.04), Mid (.05–.08), and Late (.09–.12). The last column is the drafter's all-round total at that position."
     ));
   }
   main.appendChild(insightCard);

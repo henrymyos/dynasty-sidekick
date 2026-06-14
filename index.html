@@ -335,6 +335,7 @@
   .rec-tile .stat-value { font-size: 18px; line-height: 1.25; }
   .rec-tile .stat-value .rec-count { color: var(--muted); font-weight: 600; font-size: 14px; margin-left: 6px; }
   .rec-sub { color: var(--muted); font-size: 11px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .rec-line + .rec-line { margin-top: 2px; }
   .rec-tile .stat-label .rec-medal { margin-right: 5px; text-transform: none; }
   .rec-empty { color: var(--pending); font-style: italic; }
   .empty {
@@ -3827,101 +3828,6 @@ function renderStats() {
   const main = document.getElementById("main");
   main.innerHTML = "";
 
-  // ----- Draft records & streaks graphic -----
-  {
-    // Winner(s) of a record by a numeric extractor (handles ties).
-    const topRecord = (rows, valFn) => {
-      let best = 0, winners = [];
-      rows.forEach(r => {
-        const v = valFn(r);
-        if (v > best) { best = v; winners = [r]; }
-        else if (v === best && v > 0) winners.push(r);
-      });
-      return { best, winners };
-    };
-    // Per (drafter, draft) tallies of how many picks they held in a given round.
-    const roundSingleDraft = round => {
-      const groups = {};
-      state.picks.filter(p => p.round === round).forEach(p => {
-        const k = p.year + "|" + p.person;
-        (groups[k] || (groups[k] = { person: p.person, year: p.year, count: 0, slots: [] })).count++;
-        groups[k].slots.push(p);
-      });
-      return Object.values(groups);
-    };
-    // Longest run of consecutive selections (same drafter, back-to-back slots)
-    // within one round of one draft.
-    const longestRun = round => {
-      let best = { len: 0 };
-      state.years.forEach(year => {
-        const picks = state.picks
-          .filter(p => p.year === year && p.round === round)
-          .sort((a, b) => a.pickInRound - b.pickInRound);
-        let cur = [];
-        const flush = () => {
-          if (cur.length > best.len) best = { len: cur.length, person: cur[0].person, year, slots: cur.slice() };
-        };
-        picks.forEach(p => {
-          const prev = cur[cur.length - 1];
-          if (prev && prev.person === p.person && p.pickInRound === prev.pickInRound + 1) cur.push(p);
-          else { flush(); cur = [p]; }
-        });
-        flush();
-      });
-      return best;
-    };
-    // Most picks of any round held by one drafter in a single draft.
-    const allCounts = {};
-    state.picks.forEach(p => {
-      const k = p.year + "|" + p.person;
-      (allCounts[k] || (allCounts[k] = { person: p.person, year: p.year, count: 0 })).count++;
-    });
-
-    const slotsText = picks => picks.map(p => p.slot).filter(Boolean).join(", ");
-    const winnersLabel = w =>
-      w.length === 1 ? w[0].person : w.length <= 3 ? w.map(r => r.person).join(", ") : w.length + " tied";
-
-    // "Most in a single draft" tile from a list of {person, year, count, slots?}.
-    const countTile = (medal, label, rows) => {
-      const { best, winners } = topRecord(rows, r => r.count);
-      const has = winners.length > 0;
-      return el("div", { class: "stat rec-tile" },
-        el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, medal), label),
-        el("div", { class: "stat-value" },
-          has ? winnersLabel(winners) : el("span", { class: "rec-empty" }, "—"),
-          has ? el("span", { class: "rec-count" }, "×" + best) : null),
-        has && winners.length === 1
-          ? el("div", { class: "rec-sub" }, winners[0].year + (winners[0].slots ? " · " + slotsText(winners[0].slots) : ""))
-          : null);
-    };
-
-    // "Longest back-to-back run" tile.
-    const runTile = (label, round) => {
-      const r = longestRun(round);
-      const has = r.len >= 2;  // a run is two or more in a row
-      return el("div", { class: "stat rec-tile" },
-        el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, "🔥"), label),
-        el("div", { class: "stat-value" },
-          has ? r.person : el("span", { class: "rec-empty" }, "none"),
-          has ? el("span", { class: "rec-count" }, r.len + " straight") : null),
-        has ? el("div", { class: "rec-sub" }, r.year + " · " + slotsText(r.slots)) : null);
-    };
-
-    const recordsCard = el("div", { class: "card" },
-      el("h2", {}, "Draft Records"),
-      el("div", { class: "stat-grid" },
-        countTile("①", "Most 1st-Round Picks", roundSingleDraft(1)),
-        countTile("②", "Most 2nd-Round Picks", roundSingleDraft(2)),
-        countTile("③", "Most 3rd-Round Picks", roundSingleDraft(3)),
-        runTile("Most 1st-Rounders in a Row", 1),
-        runTile("Most 2nd-Rounders in a Row", 2),
-        runTile("Most 3rd-Rounders in a Row", 3),
-        countTile("📋", "Most Picks in a Draft", Object.values(allCounts))),
-      el("div", { class: "pct", style: "margin-top:8px" },
-        "Records within a single draft. “In a row” = consecutive back-to-back slots held by one drafter. ×N is the count; the draft year and slots are shown below each."));
-    main.appendChild(recordsCard);
-  }
-
   // ----- Year × Round matrix -----
   main.appendChild(el("div", { class: "section-header" }, "League Overview",
     el("span", { class: "section-sub" }, "How the league as a whole has drafted")));
@@ -4562,6 +4468,111 @@ function renderStats() {
     ));
   }
   main.appendChild(adpCard);
+
+  // ----- Draft records graphic (near the bottom of the page) -----
+  {
+    // Winner(s) of a record by a numeric extractor — returns every drafter tied
+    // for the top value, not just one.
+    const topRecord = (rows, valFn) => {
+      let best = 0, winners = [];
+      rows.forEach(r => {
+        const v = valFn(r);
+        if (v > best) { best = v; winners = [r]; }
+        else if (v === best && v > 0) winners.push(r);
+      });
+      return { best, winners };
+    };
+    // Per (drafter, draft) tallies of how many picks they held in a given round.
+    const roundSingleDraft = round => {
+      const groups = {};
+      state.picks.filter(p => p.round === round).forEach(p => {
+        const k = p.year + "|" + p.person;
+        (groups[k] || (groups[k] = { person: p.person, year: p.year, count: 0, slots: [] })).count++;
+        groups[k].slots.push(p);
+      });
+      return Object.values(groups);
+    };
+    // Every longest run of consecutive selections (same drafter, back-to-back
+    // slots) within one round of one draft. Returns ALL drafters tied at the max.
+    const longestRuns = round => {
+      const runs = [];  // { person, year, len, slots }
+      state.years.forEach(year => {
+        const picks = state.picks
+          .filter(p => p.year === year && p.round === round)
+          .sort((a, b) => a.pickInRound - b.pickInRound);
+        let cur = [];
+        const flush = () => {
+          if (cur.length >= 2) runs.push({ person: cur[0].person, year, len: cur.length, slots: cur.slice() });
+        };
+        picks.forEach(p => {
+          const prev = cur[cur.length - 1];
+          if (prev && prev.person === p.person && p.pickInRound === prev.pickInRound + 1) cur.push(p);
+          else { flush(); cur = [p]; }
+        });
+        flush();
+      });
+      if (!runs.length) return { len: 0, winners: [] };
+      const max = Math.max(...runs.map(r => r.len));
+      // One entry per drafter (their first achievement of the record length).
+      const seen = new Set(), winners = [];
+      runs.filter(r => r.len === max)
+        .sort((a, b) => a.year - b.year)
+        .forEach(r => { if (!seen.has(r.person)) { seen.add(r.person); winners.push(r); } });
+      return { len: max, winners };
+    };
+    // Most picks of any round held by one drafter in a single draft.
+    const allCounts = {};
+    state.picks.forEach(p => {
+      const k = p.year + "|" + p.person;
+      (allCounts[k] || (allCounts[k] = { person: p.person, year: p.year, count: 0 })).count++;
+    });
+
+    const slotsText = picks => picks.map(p => p.slot).filter(Boolean).join(", ");
+    const namesText = rows => rows.map(r => r.person).join(", ");
+    // Per-winner detail lines (name shown only when there's more than one).
+    const detailLines = (rows, multi) => rows.map(r =>
+      el("div", { class: "rec-line" }, (multi ? r.person + " — " : "") + r.year + " · " + slotsText(r.slots)));
+
+    // "Most in a single draft" tile from a list of {person, year, count, slots?}.
+    const countTile = (medal, label, rows) => {
+      const { best, winners } = topRecord(rows, r => r.count);
+      const has = winners.length > 0;
+      const multi = winners.length > 1;
+      return el("div", { class: "stat rec-tile" },
+        el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, medal), label),
+        el("div", { class: "stat-value" },
+          has ? namesText(winners) : el("span", { class: "rec-empty" }, "—"),
+          has ? el("span", { class: "rec-count" }, "×" + best) : null),
+        has && winners[0].slots ? el("div", { class: "rec-sub" }, detailLines(winners, multi)) : null);
+    };
+
+    // "Longest back-to-back run" tile — lists every drafter tied at the record.
+    const runTile = (label, round) => {
+      const { len, winners } = longestRuns(round);
+      const has = len >= 2;  // a run is two or more in a row
+      const multi = winners.length > 1;
+      return el("div", { class: "stat rec-tile" },
+        el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, "🔥"), label),
+        el("div", { class: "stat-value" },
+          has ? namesText(winners) : el("span", { class: "rec-empty" }, "none"),
+          has ? el("span", { class: "rec-count" }, len + " straight") : null),
+        has ? el("div", { class: "rec-sub" }, detailLines(winners, multi)) : null);
+    };
+
+    const recordsCard = el("div", { class: "card" },
+      el("h2", {}, "Draft Records"),
+      el("div", { class: "stat-grid" },
+        countTile("①", "Most 1st-Round Picks", roundSingleDraft(1)),
+        countTile("②", "Most 2nd-Round Picks", roundSingleDraft(2)),
+        countTile("③", "Most 3rd-Round Picks", roundSingleDraft(3)),
+        runTile("Most 1st-Rounders in a Row", 1),
+        runTile("Most 2nd-Rounders in a Row", 2),
+        runTile("Most 3rd-Rounders in a Row", 3),
+        countTile("📋", "Most Picks in a Draft", Object.values(allCounts))),
+      el("div", { class: "pct", style: "margin-top:8px" },
+        "Records within a single draft. “In a row” = consecutive back-to-back slots held by one drafter; every drafter tied for a record is listed."));
+    main.appendChild(recordsCard);
+  }
 }
 
 function renderAdpList(rows) {

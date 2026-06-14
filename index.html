@@ -3827,6 +3827,101 @@ function renderStats() {
   const main = document.getElementById("main");
   main.innerHTML = "";
 
+  // ----- Draft records & streaks graphic -----
+  {
+    // Winner(s) of a record by a numeric extractor (handles ties).
+    const topRecord = (rows, valFn) => {
+      let best = 0, winners = [];
+      rows.forEach(r => {
+        const v = valFn(r);
+        if (v > best) { best = v; winners = [r]; }
+        else if (v === best && v > 0) winners.push(r);
+      });
+      return { best, winners };
+    };
+    // Per (drafter, draft) tallies of how many picks they held in a given round.
+    const roundSingleDraft = round => {
+      const groups = {};
+      state.picks.filter(p => p.round === round).forEach(p => {
+        const k = p.year + "|" + p.person;
+        (groups[k] || (groups[k] = { person: p.person, year: p.year, count: 0, slots: [] })).count++;
+        groups[k].slots.push(p);
+      });
+      return Object.values(groups);
+    };
+    // Longest run of consecutive selections (same drafter, back-to-back slots)
+    // within one round of one draft.
+    const longestRun = round => {
+      let best = { len: 0 };
+      state.years.forEach(year => {
+        const picks = state.picks
+          .filter(p => p.year === year && p.round === round)
+          .sort((a, b) => a.pickInRound - b.pickInRound);
+        let cur = [];
+        const flush = () => {
+          if (cur.length > best.len) best = { len: cur.length, person: cur[0].person, year, slots: cur.slice() };
+        };
+        picks.forEach(p => {
+          const prev = cur[cur.length - 1];
+          if (prev && prev.person === p.person && p.pickInRound === prev.pickInRound + 1) cur.push(p);
+          else { flush(); cur = [p]; }
+        });
+        flush();
+      });
+      return best;
+    };
+    // Most picks of any round held by one drafter in a single draft.
+    const allCounts = {};
+    state.picks.forEach(p => {
+      const k = p.year + "|" + p.person;
+      (allCounts[k] || (allCounts[k] = { person: p.person, year: p.year, count: 0 })).count++;
+    });
+
+    const slotsText = picks => picks.map(p => p.slot).filter(Boolean).join(", ");
+    const winnersLabel = w =>
+      w.length === 1 ? w[0].person : w.length <= 3 ? w.map(r => r.person).join(", ") : w.length + " tied";
+
+    // "Most in a single draft" tile from a list of {person, year, count, slots?}.
+    const countTile = (medal, label, rows) => {
+      const { best, winners } = topRecord(rows, r => r.count);
+      const has = winners.length > 0;
+      return el("div", { class: "stat rec-tile" },
+        el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, medal), label),
+        el("div", { class: "stat-value" },
+          has ? winnersLabel(winners) : el("span", { class: "rec-empty" }, "—"),
+          has ? el("span", { class: "rec-count" }, "×" + best) : null),
+        has && winners.length === 1
+          ? el("div", { class: "rec-sub" }, winners[0].year + (winners[0].slots ? " · " + slotsText(winners[0].slots) : ""))
+          : null);
+    };
+
+    // "Longest back-to-back run" tile.
+    const runTile = (label, round) => {
+      const r = longestRun(round);
+      const has = r.len >= 2;  // a run is two or more in a row
+      return el("div", { class: "stat rec-tile" },
+        el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, "🔥"), label),
+        el("div", { class: "stat-value" },
+          has ? r.person : el("span", { class: "rec-empty" }, "none"),
+          has ? el("span", { class: "rec-count" }, r.len + " straight") : null),
+        has ? el("div", { class: "rec-sub" }, r.year + " · " + slotsText(r.slots)) : null);
+    };
+
+    const recordsCard = el("div", { class: "card" },
+      el("h2", {}, "Draft Records"),
+      el("div", { class: "stat-grid" },
+        countTile("①", "Most 1st-Round Picks", roundSingleDraft(1)),
+        countTile("②", "Most 2nd-Round Picks", roundSingleDraft(2)),
+        countTile("③", "Most 3rd-Round Picks", roundSingleDraft(3)),
+        runTile("Most 1st-Rounders in a Row", 1),
+        runTile("Most 2nd-Rounders in a Row", 2),
+        runTile("Most 3rd-Rounders in a Row", 3),
+        countTile("📋", "Most Picks in a Draft", Object.values(allCounts))),
+      el("div", { class: "pct", style: "margin-top:8px" },
+        "Records within a single draft. “In a row” = consecutive back-to-back slots held by one drafter. ×N is the count; the draft year and slots are shown below each."));
+    main.appendChild(recordsCard);
+  }
+
   // ----- Year × Round matrix -----
   main.appendChild(el("div", { class: "section-header" }, "League Overview",
     el("span", { class: "section-sub" }, "How the league as a whole has drafted")));
@@ -5481,11 +5576,9 @@ function renderHistory() {
   finishedYears.forEach(y => {
     const playoffCut = y.playoffTeams || Math.floor((y.teams || 12) / 2);
     Object.entries(y.finishes).forEach(([name, place]) => {
-      const m = managers[name] || (managers[name] = { name, finishes: [], wins: 0, top2: 0, top3: 0, playoffs: 0, firstYears: [], secondYears: [], thirdYears: [] });
+      const m = managers[name] || (managers[name] = { name, finishes: [], wins: 0, top2: 0, top3: 0, playoffs: 0 });
       m.finishes.push(place);
-      if (place === 1) { m.wins++; m.firstYears.push(y.year); }
-      if (place === 2) m.secondYears.push(y.year);
-      if (place === 3) m.thirdYears.push(y.year);
+      if (place === 1) m.wins++;
       if (place <= 2) m.top2++;
       if (place <= 3) m.top3++;
       if (place <= playoffCut) m.playoffs++;
@@ -5581,91 +5674,6 @@ function renderHistory() {
     "Gold / silver / bronze = top three, green = made playoffs, red = bottom three. " +
     (latestDone ? "" : "* Projected from current contender rankings.")));
   main.appendChild(standCard);
-
-  // ----- Records & streaks graphic -----
-  {
-    // Winner(s) of a record by a numeric extractor over managers (handles ties).
-    const topBy = valFn => {
-      let best = 0, winners = [];
-      mgrList.forEach(m => {
-        const v = valFn(m);
-        if (v > best) { best = v; winners = [m]; }
-        else if (v === best && v > 0) winners.push(m);
-      });
-      return { best, winners };
-    };
-    // Longest run of a given finishing place across consecutive completed seasons.
-    const longestStreak = target => {
-      let best = { len: 0 };
-      names.forEach(name => {
-        let cur = 0, start = null;
-        finishedYears.forEach(y => {
-          if (y.finishes[name] === target) {
-            if (cur === 0) start = y.year;
-            cur++;
-            if (cur > best.len) best = { len: cur, name, start, end: y.year };
-          } else cur = 0;
-        });
-      });
-      return best;
-    };
-    // Most picks made by one drafter in a single draft.
-    const pickCounts = {};
-    state.picks.forEach(p => {
-      const k = p.year + "|" + p.person;
-      pickCounts[k] = (pickCounts[k] || 0) + 1;
-    });
-    let pickRec = { count: 0 };
-    Object.entries(pickCounts).forEach(([k, c]) => {
-      if (c > pickRec.count) { const [year, person] = k.split("|"); pickRec = { count: c, person, year }; }
-    });
-
-    const winnersLabel = w =>
-      w.length === 1 ? w[0].name : w.length <= 3 ? w.map(m => m.name).join(", ") : w.length + " tied";
-
-    const countTile = (medal, label, valFn, yearsFn) => {
-      const { best, winners } = topBy(valFn);
-      const has = winners.length > 0;
-      return el("div", { class: "stat rec-tile" },
-        el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, medal), label),
-        el("div", { class: "stat-value" },
-          has ? winnersLabel(winners) : el("span", { class: "rec-empty" }, "—"),
-          has ? el("span", { class: "rec-count" }, "×" + best) : null),
-        has && winners.length === 1 ? el("div", { class: "rec-sub" }, yearsFn(winners[0]).join(", ")) : null);
-    };
-
-    const streakTile = (medal, label, target) => {
-      const s = longestStreak(target);
-      const has = s.len >= 2;  // a streak is two or more in a row
-      return el("div", { class: "stat rec-tile" },
-        el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, medal), label),
-        el("div", { class: "stat-value" },
-          has ? s.name : el("span", { class: "rec-empty" }, "none yet"),
-          has ? el("span", { class: "rec-count" }, s.len + " yrs") : null),
-        has ? el("div", { class: "rec-sub" }, s.start === s.end ? String(s.start) : s.start + "–" + s.end) : null);
-    };
-
-    const pickTile = el("div", { class: "stat rec-tile" },
-      el("div", { class: "stat-label" }, el("span", { class: "rec-medal" }, "📋"), "Most Picks in a Draft"),
-      el("div", { class: "stat-value" },
-        pickRec.count ? pickRec.person : el("span", { class: "rec-empty" }, "—"),
-        pickRec.count ? el("span", { class: "rec-count" }, "×" + pickRec.count) : null),
-      pickRec.count ? el("div", { class: "rec-sub" }, String(pickRec.year)) : null);
-
-    const recordsCard = el("div", { class: "card" },
-      el("h2", {}, "League Records & Streaks"),
-      el("div", { class: "stat-grid" },
-        countTile("🥇", "Most Titles", m => m.firstYears.length, m => m.firstYears),
-        countTile("🥈", "Most Runner-Ups", m => m.secondYears.length, m => m.secondYears),
-        countTile("🥉", "Most Third Place", m => m.thirdYears.length, m => m.thirdYears),
-        streakTile("🔥", "Longest Title Streak", 1),
-        streakTile("🥈", "Longest Runner-Up Streak", 2),
-        streakTile("🥉", "Longest Third-Place Streak", 3),
-        pickTile),
-      el("div", { class: "hist-note" },
-        "Finishes from completed seasons; a streak counts consecutive seasons in the same place. ×N is the record total."));
-    main.appendChild(recordsCard);
-  }
 
   // ----- Card 2: regular-season records -----
   const finishByYear = {};

@@ -820,6 +820,103 @@
   .modal-row .mr-owner { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
   .modal-row .mr-val { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
+  /* Change-league page */
+  .league-page {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 2000;
+    overflow-y: auto;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 64px 16px;
+  }
+  .league-page-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    width: 100%;
+    max-width: 480px;
+    padding: 28px;
+  }
+  .league-page-brand {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0 0 18px;
+  }
+  .league-page-card h2 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 600;
+  }
+  .league-page-card p.lp-sub {
+    margin: 0 0 20px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .league-page-card label.lp-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .lp-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .lp-input::placeholder { color: var(--pending); }
+  .lp-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+  }
+  .lp-hint { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+  .lp-error { font-size: 13px; color: var(--miss); margin: 10px 0 0; min-height: 16px; }
+  .lp-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 22px;
+    flex-wrap: wrap;
+  }
+  .lp-btn {
+    border-radius: 6px;
+    padding: 9px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    font-family: inherit;
+  }
+  .lp-btn-primary {
+    background: var(--accent);
+    color: #0d1117;
+    border-color: var(--accent);
+  }
+  .lp-btn-primary:hover { filter: brightness(1.08); }
+  .lp-btn-ghost {
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  .lp-btn-ghost:hover { background: var(--border); }
+  .lp-btn-link {
+    background: none;
+    border: none;
+    color: var(--muted);
+    margin-left: auto;
+  }
+  .lp-btn-link:hover { color: var(--text); }
+
   .pill {
     display: inline-block;
     padding: 2px 8px;
@@ -6596,20 +6693,75 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
   if (state.workspace === "team" && state.view === "liveDraft") loadDraftLive();
   else loadData();
 });
-document.getElementById("leagueBtn").addEventListener("click", () => {
-  const input = prompt(
-    "Enter a Sleeper league ID to view that league.\nLeave empty to return to the home league.",
-    IS_DEFAULT_LEAGUE ? "" : LEAGUE_ID
-  );
-  if (input == null) return;  // cancelled
-  const id = input.trim();
-  if (!id) {
-    if (!IS_DEFAULT_LEAGUE) location.href = location.pathname;
-    return;
+function openLeaguePage() {
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = e => {
+    if (e.key === "Escape") close();
+    else if (e.key === "Enter" && document.activeElement === input) submit();
+  };
+
+  const errorEl = el("p", { class: "lp-error" });
+  const input = el("input", {
+    class: "lp-input",
+    type: "text",
+    inputmode: "numeric",
+    placeholder: "e.g. 1312076332460425216",
+    value: IS_DEFAULT_LEAGUE ? "" : LEAGUE_ID,
+    "aria-label": "Sleeper league ID",
+    oninput: () => { errorEl.textContent = ""; },
+  });
+
+  function submit() {
+    const id = input.value.trim();
+    if (!id) {
+      if (!IS_DEFAULT_LEAGUE) location.href = location.pathname;
+      else { errorEl.textContent = "Enter a league ID, or close to stay here."; input.focus(); }
+      return;
+    }
+    if (!/^\d{10,20}$/.test(id)) {
+      errorEl.textContent = "That doesn't look like a Sleeper league ID (it's a long number).";
+      input.focus();
+      return;
+    }
+    if (id !== LEAGUE_ID) location.href = location.pathname + "?league=" + id;
+    else close();
   }
-  if (!/^\d{10,20}$/.test(id)) { alert("That doesn't look like a Sleeper league ID (it's a long number)."); return; }
-  if (id !== LEAGUE_ID) location.href = location.pathname + "?league=" + id;
-});
+
+  const actions = el("div", { class: "lp-actions" },
+    el("button", { class: "lp-btn lp-btn-primary", type: "button", onclick: submit }, "View league"),
+    !IS_DEFAULT_LEAGUE && el("button", {
+      class: "lp-btn lp-btn-ghost",
+      type: "button",
+      onclick: () => { location.href = location.pathname; },
+    }, "Back to home league"),
+    el("button", { class: "lp-btn lp-btn-link", type: "button", onclick: close }, "Cancel"),
+  );
+
+  const card = el("div", { class: "league-page-card" },
+    el("p", { class: "league-page-brand" }, "🏈 Draft Picks Tracker"),
+    el("h2", {}, "Change league"),
+    el("p", { class: "lp-sub" }, "Enter a Sleeper league ID to view its drafts and teams. Leave it blank and choose “Back to home league” to return to the default league."),
+    el("label", { class: "lp-label", for: "lp-league-input" }, "Sleeper league ID"),
+    input,
+    el("p", { class: "lp-hint" }, "Find it in your Sleeper league URL — it's the long number after /leagues/."),
+    errorEl,
+    actions,
+  );
+  input.id = "lp-league-input";
+
+  const overlay = el("div", {
+    class: "league-page",
+    onclick: e => { if (e.target === overlay) close(); },
+  }, card);
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(overlay);
+  input.focus();
+}
+
+document.getElementById("leagueBtn").addEventListener("click", openLeaguePage);
 
 // Initial bootstrap
 setWorkspace(state.workspace);

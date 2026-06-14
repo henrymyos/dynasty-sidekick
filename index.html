@@ -1357,7 +1357,7 @@
       <span class="status-dot" id="statusDot"></span>
       <span id="statusText">Loading…</span>
       <button class="refresh" id="refreshBtn">Refresh</button>
-      <button class="refresh" id="leagueBtn" title="View a different Sleeper league">League</button>
+      <button class="refresh" id="leagueBtn" title="View a different Sleeper league">Change league</button>
     </div>
   </div>
   <nav class="tabs" id="tabsNav"></nav>
@@ -6694,9 +6694,14 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
   else loadData();
 });
 function openLeaguePage() {
+  // Don't stack overlays if the page is already open.
+  const existing = document.querySelector(".league-page");
+  if (existing) { existing.querySelector(".lp-input")?.focus(); return; }
+  const prevFocus = document.activeElement;
   const close = () => {
     overlay.remove();
     document.removeEventListener("keydown", onKey);
+    if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
   };
   const onKey = e => {
     if (e.key === "Escape") close();
@@ -6710,7 +6715,6 @@ function openLeaguePage() {
     inputmode: "numeric",
     placeholder: "e.g. 1312076332460425216",
     value: IS_DEFAULT_LEAGUE ? "" : LEAGUE_ID,
-    "aria-label": "Sleeper league ID",
     oninput: () => { errorEl.textContent = ""; },
   });
 
@@ -6740,9 +6744,14 @@ function openLeaguePage() {
     el("button", { class: "lp-btn lp-btn-link", type: "button", onclick: close }, "Cancel"),
   );
 
-  const card = el("div", { class: "league-page-card" },
+  const card = el("div", {
+    class: "league-page-card",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": "lp-title",
+  },
     el("p", { class: "league-page-brand" }, "🏈 Draft Picks Tracker"),
-    el("h2", {}, "Change league"),
+    el("h2", { id: "lp-title" }, "Change league"),
     el("p", { class: "lp-sub" }, "Enter a Sleeper league ID to view its drafts and teams. Leave it blank and choose “Back to home league” to return to the default league."),
     el("label", { class: "lp-label", for: "lp-league-input" }, "Sleeper league ID"),
     input,

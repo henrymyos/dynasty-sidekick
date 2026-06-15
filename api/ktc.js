@@ -22,6 +22,9 @@ const SEASON_SNAPSHOTS = {
   "2023": { ts: "20230611042610", original: "https://keeptradecut.com/" },
   "2024": { ts: "20240609032233", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
   "2025": { ts: "20250615024724", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
+  // Closest rookie-rankings capture to the 2026 fantasy draft is May 25 (no
+  // June snapshot exists); already post-NFL-draft, so values are settled.
+  "2026": { ts: "20260525084216", original: "https://keeptradecut.com/dynasty-rankings/rookie-rankings" },
 };
 
 function normalizeName(s) {

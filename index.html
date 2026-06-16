@@ -3063,21 +3063,25 @@ function renderRosters() {
     const otherAssets = assetsForRoster(other.roster_id);
     const theirMovable = movablePool(otherAssets);
     const theirNeed = needSetFor(other.roster_id);
-    // Trim per side: top 12 movables. With 1-2-3 sized combos that's
-    // C(12,1)+C(12,2)+C(12,3) = 12+66+220 = 298 sides per roster. Cross-product
-    // per partner ~89k worst case; with weak-pos and ID-overlap early exits
-    // and 11 partners we land around ~1M evaluated swaps. Fine on the client.
-    const myTrimmed = myMovable.slice().sort((a, b) => b.value - a.value).slice(0, 12);
-    const theirTrimmed = theirMovable.slice().sort((a, b) => b.value - a.value).slice(0, 12);
+    // Every asset is tradeable: 1- and 2-asset sides come from the FULL movable
+    // pool, so even deep bench players and late picks can headline or fill a
+    // deal. Only 3-asset PACKAGES stay anchored to the top ~14 by value — three
+    // scrubs never balance a real trade, and the full C(n,3) is the term that
+    // blows up the cross-product. 2-combos only grow quadratically, so this
+    // stays a few million swaps even on a deep roster.
+    const myAll = myMovable.slice().sort((a, b) => b.value - a.value);
+    const theirAll = theirMovable.slice().sort((a, b) => b.value - a.value);
+    const myCore = myAll.slice(0, 14);
+    const theirCore = theirAll.slice(0, 14);
     const mySides = [
-      ...combos(myTrimmed, 1),
-      ...combos(myTrimmed, 2),
-      ...combos(myTrimmed, 3),
+      ...combos(myAll, 1),
+      ...combos(myAll, 2),
+      ...combos(myCore, 3),
     ];
     const theirSides = [
-      ...combos(theirTrimmed, 1),
-      ...combos(theirTrimmed, 2),
-      ...combos(theirTrimmed, 3),
+      ...combos(theirAll, 1),
+      ...combos(theirAll, 2),
+      ...combos(theirCore, 3),
     ];
 
     mySides.forEach(gives => {
@@ -3149,6 +3153,7 @@ function renderRosters() {
           theirFits: theirFinal.fits,
           fairness, score, shape,
           anchorPos: samePosAnchor ? givesPos : null,
+          dealValue: Math.max(myGivesSum.ktc, getsSum.ktc),
         });
       });
     });
@@ -3161,7 +3166,7 @@ function renderRosters() {
   const seenShape = {};
   const seenKeys = new Set();
   const topTrades = [];
-  let cornerstoneCount = 0;
+  let highDealCount = 0;
   function mixTag(t) {
     const givesHasPicks = t.gives.some(a => a.kind === "pick");
     const givesHasPlayers = t.gives.some(a => a.kind === "player");
@@ -3172,9 +3177,6 @@ function renderRosters() {
     if (!givesHasPicks && !getsHasPicks) return "playerOnly";
     if (!givesHasPlayers && !getsHasPlayers) return "pickOnly";
     return "mixed";
-  }
-  function hasCornerstone(t) {
-    return [...t.gives, ...t.gets].some(a => a.tier.label === "Cornerstone");
   }
   for (const t of allTrades) {
     if (topTrades.length >= 10) break;
@@ -3194,14 +3196,16 @@ function renderRosters() {
     // lean on same-position tier-ups and player-for-pick deals.
     const shc = seenShape[t.shape] || 0;
     if (t.shape === "cross" && shc >= 2) continue;
-    // Cap cornerstone-headlining trades at 3 so the list spans tier sizes.
-    const involvesCornerstone = hasCornerstone(t);
-    if (involvesCornerstone && cornerstoneCount >= 3) continue;
+    // Bias the list toward lower-value deals: cap "big" trades (a side worth a
+    // stud) at 3, so most surfaced trades involve mid/upside-tier assets and
+    // only a couple are headliner swaps.
+    const isHighDeal = t.dealValue >= 4000;
+    if (isHighDeal && highDealCount >= 3) continue;
     seenPartner[t.partnerName] = c + 1;
     seenSize[sizeKey] = sc + 1;
     seenMix[mix] = mc + 1;
     seenShape[t.shape] = shc + 1;
-    if (involvesCornerstone) cornerstoneCount++;
+    if (isHighDeal) highDealCount++;
     topTrades.push(t);
   }
 

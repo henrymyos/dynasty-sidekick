@@ -2671,10 +2671,22 @@ function renderRosters() {
   }
   const FUTURE_YEARS = [currentYear, currentYear + 1, currentYear + 2];
   const ROUNDS = [1, 2, 3];
+  // Picks whose draft has already been held are spent — they've turned into the
+  // players now sitting on rosters, so they must not show up as tradeable
+  // assets. Keyed "season|round" from every completed draft.
+  const usedPickKeys = new Set();
+  (state.sleeper.seasons || []).forEach(s => {
+    (s.drafts || []).forEach(d => {
+      if (d.status !== "complete" || !d.picks || !d.picks.length) return;
+      const dSeason = parseInt(d.season, 10);
+      for (let r = 1; r <= (d.rounds || 0); r++) usedPickKeys.add(dSeason + "|" + r);
+    });
+  });
   function picksOwnedBy(rosterId) {
     const out = [];
     FUTURE_YEARS.forEach(season => {
       ROUNDS.forEach(round => {
+        if (usedPickKeys.has(season + "|" + round)) return;  // already drafted
         const trades = tradedPicks.filter(t => parseInt(t.season, 10) === season && t.round === round);
         const tradedMap = new Map();
         trades.forEach(t => tradedMap.set(t.roster_id, t.owner_id));

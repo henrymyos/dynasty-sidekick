@@ -2956,8 +2956,14 @@ function renderRosters() {
     });
     return out;
   }
+  // Base depth per roster is constant during the search but hasAdequateBackup
+  // runs millions of times, so scan each roster only once.
+  const _depthMemo = {};
+  function baseDepth(rosterId) {
+    return _depthMemo[rosterId] || (_depthMemo[rosterId] = depthCounts(rosterId));
+  }
   function hasAdequateBackup(rosterId, gives, gets) {
-    const before = depthCounts(rosterId);
+    const before = baseDepth(rosterId);
     const after = { ...before };
     gives.forEach(a => {
       if (a.kind === "player" && a.position in after && (a.ktc || 0) >= BACKUP_VALUE_FLOOR) after[a.position]--;
@@ -3055,52 +3061,48 @@ function renderRosters() {
   const myMovable = movablePool(myAssets);
   const myNeed = needSetFor(selectedRoster.roster_id);
   const myHasRealWeakness = POS.some(p => isWeakAt(selectedRoster.roster_id, p));
+  // Reward asymmetric player ↔ pick swaps (a contender/reloader staple).
+  function pickFraction(side) {
+    return side.filter(a => a.kind === "pick").length / side.length;
+  }
+  // Build the candidate trade "sides" for a pool, each paired with its value
+  // sum (computed once). Every asset is tradeable: 1- and 2-asset sides use the
+  // FULL movable pool, so deep bench players and late picks can headline or fill
+  // a deal. Only 3-asset PACKAGES stay anchored to the top ~14 by value — three
+  // scrubs never balance a real trade, and the full C(n,3) is the term that
+  // blows up the cross-product. Weak-position givers are dropped up front.
+  function buildSides(pool, rosterId) {
+    const all = pool.slice().sort((a, b) => b.value - a.value);
+    const core = all.slice(0, 14);
+    const out = [];
+    for (const side of [...combos(all, 1), ...combos(all, 2), ...combos(core, 3)]) {
+      if (side.some(g => g.kind === "player" && isWeakAt(rosterId, g.position))) continue;
+      out.push({ side, sum: sumValues(side) });
+    }
+    return out;
+  }
+  // mySides are identical for every partner, so build them just once.
+  const mySideData = buildSides(myMovable, selectedRoster.roster_id);
   const allTrades = [];
   latestSeason.rosters.forEach(other => {
     if (other.roster_id === selectedRoster.roster_id) return;
     const otherUser = latestSeason.users.find(u => u.user_id === other.owner_id);
     const otherName = otherUser ? canonicalOwnerName(userDisplay(otherUser)) : "—";
     const otherAssets = assetsForRoster(other.roster_id);
-    const theirMovable = movablePool(otherAssets);
     const theirNeed = needSetFor(other.roster_id);
-    // Every asset is tradeable: 1- and 2-asset sides come from the FULL movable
-    // pool, so even deep bench players and late picks can headline or fill a
-    // deal. Only 3-asset PACKAGES stay anchored to the top ~14 by value — three
-    // scrubs never balance a real trade, and the full C(n,3) is the term that
-    // blows up the cross-product. 2-combos only grow quadratically, so this
-    // stays a few million swaps even on a deep roster.
-    const myAll = myMovable.slice().sort((a, b) => b.value - a.value);
-    const theirAll = theirMovable.slice().sort((a, b) => b.value - a.value);
-    const myCore = myAll.slice(0, 14);
-    const theirCore = theirAll.slice(0, 14);
-    const mySides = [
-      ...combos(myAll, 1),
-      ...combos(myAll, 2),
-      ...combos(myCore, 3),
-    ];
-    const theirSides = [
-      ...combos(theirAll, 1),
-      ...combos(theirAll, 2),
-      ...combos(theirCore, 3),
-    ];
+    const theirSideData = buildSides(movablePool(otherAssets), other.roster_id);
 
-    mySides.forEach(gives => {
-      const gaveWeakPos = gives.some(g => g.kind === "player" && isWeakAt(selectedRoster.roster_id, g.position));
-      if (gaveWeakPos) return;
-      const myGivesIds = new Set(gives.map(g => g.id));
-      const myGivesSum = sumValues(gives);
-      theirSides.forEach(gets => {
-        // Overlap impossible (different rosters), so skip the check.
-        const gaveTheirWeak = gets.some(g => g.kind === "player" && isWeakAt(other.roster_id, g.position));
-        if (gaveTheirWeak) return;
+    for (const { side: gives, sum: myGivesSum } of mySideData) {
+      for (const { side: gets, sum: getsSum } of theirSideData) {
+        // Cheapest discriminator first — the vast majority of pairs fail the
+        // value match, so prune on it before the costlier depth/impact checks.
+        if (!bothCalcsAgree(myGivesSum, getsSum)) continue;
         // Both sides must keep a useful backup at every position they ship out.
-        if (!hasAdequateBackup(selectedRoster.roster_id, gives, gets)) return;
-        if (!hasAdequateBackup(other.roster_id, gets, gives)) return;
-        const getsSum = sumValues(gets);
-        if (!bothCalcsAgree(myGivesSum, getsSum)) return;
+        if (!hasAdequateBackup(selectedRoster.roster_id, gives, gets)) continue;
+        if (!hasAdequateBackup(other.roster_id, gets, gives)) continue;
         const myFinal = rosterImpact(selectedRoster.roster_id, gives, gets, myNeed);
         const theirFinal = rosterImpact(other.roster_id, gets, gives, theirNeed);
-        if (!myFinal.fits.length || !theirFinal.fits.length) return;
+        if (!myFinal.fits.length || !theirFinal.fits.length) continue;
         const ktcDiff = Math.abs(myGivesSum.ktc - getsSum.ktc) / Math.max(myGivesSum.ktc, getsSum.ktc);
         const flockDiff = (myGivesSum.flock && getsSum.flock)
           ? Math.abs(myGivesSum.flock - getsSum.flock) / Math.max(myGivesSum.flock, getsSum.flock)
@@ -3109,13 +3111,6 @@ function renderRosters() {
         const fairness = 1 - worstDiff;
         const fitScore = (myFinal.fits.length + theirFinal.fits.length);
         const sizePenalty = (gives.length + gets.length - 2) * 0.06;
-        // Mix bonus: reward asymmetric player ↔ pick swaps. If one side is
-        // mostly players and the other mostly picks, that's exactly the kind
-        // of trade contenders and reloaders make. 0 when both sides are
-        // homogeneous mixes, up to ~0.10 when fully asymmetric.
-        function pickFraction(side) {
-          return side.filter(a => a.kind === "pick").length / side.length;
-        }
         const mixBonus = Math.abs(pickFraction(gives) - pickFraction(gets)) * 0.10;
         // Positional realism. The most natural dynasty trade is a same-position
         // tier-up: one team ships a stud at a position and gets back a lesser
@@ -3155,8 +3150,8 @@ function renderRosters() {
           anchorPos: samePosAnchor ? givesPos : null,
           dealValue: Math.max(myGivesSum.ktc, getsSum.ktc),
         });
-      });
-    });
+      }
+    }
   });
 
   allTrades.sort((a, b) => b.score - a.score);

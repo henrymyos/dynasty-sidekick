@@ -2914,6 +2914,16 @@ function renderRosters() {
     assets.forEach(a => { ktc += a.ktc || 0; flock += a.flock || 0; });
     return { ktc, flock };
   }
+  // The position of the most valuable PLAYER on a side (picks ignored). This is
+  // the "anchor" of the side — the headline piece a trade is really about.
+  function headlinerPos(side) {
+    let best = null;
+    side.forEach(a => {
+      if (a.kind !== "player" || !POS.includes(a.position)) return;
+      if (!best || a.value > best.value) best = a;
+    });
+    return best ? best.position : null;
+  }
   // Min "useful" depth a roster needs at each position after a trade. Counts
   // QB-eligible (1 QB + 1 SF + 1 backup = 3), RB (2 + flex + backup = 4),
   // WR (3 + flex + backup = 4), TE (1 + backup = 2). A player counts toward
@@ -3091,12 +3101,33 @@ function renderRosters() {
           return side.filter(a => a.kind === "pick").length / side.length;
         }
         const mixBonus = Math.abs(pickFraction(gives) - pickFraction(gets)) * 0.10;
+        // Positional realism. The most natural dynasty trade is a same-position
+        // tier-up: one team ships a stud at a position and gets back a lesser
+        // starter at THAT position plus extra capital (a pick or depth piece) to
+        // balance the value. We reward those and bury arbitrary cross-position
+        // 1-for-1 player swaps, which feel unrealistic.
+        const givesPos = headlinerPos(gives);
+        const getsPos = headlinerPos(gets);
+        const samePosAnchor = givesPos && getsPos && givesPos === getsPos;
+        // One side is a lone star, the other is that-position-plus-extra.
+        const oneStarVsPackage =
+          (gives.length === 1 && gives[0].kind === "player" && gets.length >= 2) ||
+          (gets.length === 1 && gets[0].kind === "player" && gives.length >= 2);
+        const crossPos1for1 =
+          gives.length === 1 && gets.length === 1 &&
+          gives[0].kind === "player" && gets[0].kind === "player" && givesPos !== getsPos;
+        let shape, realismBonus = 0, realismPenalty = 0;
+        if (samePosAnchor && oneStarVsPackage) { shape = "upgrade"; realismBonus = 0.30; }
+        else if (samePosAnchor) { shape = "swap"; realismBonus = 0.15; }
+        else if (!givesPos || !getsPos) { shape = "playerPick"; }  // player(s) for picks
+        else { shape = "cross"; realismPenalty = crossPos1for1 ? 0.30 : 0.12; }
         // Type alignment: how well "what you receive" fits your team's window.
         const theirType = managerType[other.roster_id] || "Middler";
         const myAlign = alignmentAvg(gets, myType);
         const theirAlign = alignmentAvg(gives, theirType);
         const alignScore = (myAlign + theirAlign) / 2;
-        const score = fairness * 0.50 + (fitScore / 4) * 0.20 + alignScore * 0.20 + mixBonus - sizePenalty;
+        const score = fairness * 0.45 + (fitScore / 4) * 0.15 + alignScore * 0.15
+          + mixBonus + realismBonus - realismPenalty - sizePenalty;
         allTrades.push({
           partnerName: otherName,
           partnerRosterId: other.roster_id,
@@ -3104,7 +3135,8 @@ function renderRosters() {
           myGivesSum, getsSum,
           myFits: myFinal.fits,
           theirFits: theirFinal.fits,
-          fairness, score,
+          fairness, score, shape,
+          anchorPos: samePosAnchor ? givesPos : null,
         });
       });
     });
@@ -3114,6 +3146,7 @@ function renderRosters() {
   const seenPartner = {};
   const seenSize = {};
   const seenMix = {};
+  const seenShape = {};
   const seenKeys = new Set();
   const topTrades = [];
   let cornerstoneCount = 0;
@@ -3145,12 +3178,17 @@ function renderRosters() {
     const mc = seenMix[mix] || 0;
     if (mix === "playerOnly" && mc >= 4) continue;
     if (mix === "pickOnly" && mc >= 2) continue;
+    // Keep arbitrary cross-position player swaps to a minimum — the list should
+    // lean on same-position tier-ups and player-for-pick deals.
+    const shc = seenShape[t.shape] || 0;
+    if (t.shape === "cross" && shc >= 2) continue;
     // Cap cornerstone-headlining trades at 3 so the list spans tier sizes.
     const involvesCornerstone = hasCornerstone(t);
     if (involvesCornerstone && cornerstoneCount >= 3) continue;
     seenPartner[t.partnerName] = c + 1;
     seenSize[sizeKey] = sc + 1;
     seenMix[mix] = mc + 1;
+    seenShape[t.shape] = shc + 1;
     if (involvesCornerstone) cornerstoneCount++;
     topTrades.push(t);
   }
@@ -3179,9 +3217,12 @@ function renderRosters() {
     topTrades.forEach(t => {
       const block = el("div", { class: "trade-block" });
       const partnerType = managerType[t.partnerRosterId] || "Middler";
+      const shapeLabel = t.anchorPos
+        ? `  ·  ${t.anchorPos} ${t.shape === "upgrade" ? "tier-up" : "swap"}`
+        : "";
       block.appendChild(el("div", { class: "trade-header" },
         el("span", { class: "trade-date" }, `with ${t.partnerName} (${partnerType})`),
-        el("span", { class: "trade-meta" }, `${Math.round(t.fairness * 100)}% fair  ·  ${t.gives.length}-for-${t.gets.length}`),
+        el("span", { class: "trade-meta" }, `${Math.round(t.fairness * 100)}% fair  ·  ${t.gives.length}-for-${t.gets.length}${shapeLabel}`),
       ));
       const cols = el("div", { class: "trade-cols" });
       function side(title, items) {

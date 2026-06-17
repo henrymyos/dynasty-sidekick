@@ -4672,6 +4672,84 @@ function renderStats() {
         "Records within a single draft. “In a row” = consecutive back-to-back slots held by one drafter; every drafter tied for a record is listed."));
     main.appendChild(recordsCard);
   }
+
+  // ----- Most lopsided trades (by KTC) -----
+  ensureSleeperLoaded();
+  ensureKtcDynastyLoaded();
+  ensureTradeHistoryLoaded();
+  main.appendChild(el("div", { class: "section-header" }, "Lopsided Trades",
+    el("span", { class: "section-sub" }, "The biggest KTC mismatches in league trade history")));
+  const lopCard = el("div", { class: "card" }, el("h2", {}, "Most Lopsided Trades"));
+  if (!state.sleeper || !state.ktcDynasty) {
+    lopCard.appendChild(el("div", { class: "empty" }, "Loading trades…"));
+  } else {
+    const players = state.sleeper.players;
+    const seasons = state.sleeper.seasons;
+    const scored = [];
+    const seenTx = new Set();
+    seasons.forEach(season => {
+      (season.trades || []).forEach(trade => {
+        if (trade.tx_id != null) { if (seenTx.has(trade.tx_id)) return; seenTx.add(trade.tx_id); }
+        if (!trade.roster_ids || trade.roster_ids.length !== 2) return;  // 2-team trades only
+        const ev = evaluateTrade(trade, trade.roster_ids[0], state.tradeHistory, players);
+        if (!ev) return;
+        if (ev.mySent <= 0 || ev.myReceived <= 0) return;  // both sides must be priceable
+        const favor = Math.abs(ev.swing);
+        if (favor <= 0) return;
+        const [r0, r1] = trade.roster_ids;
+        const winnerRid = ev.swing >= 0 ? r0 : r1;
+        const loserRid = ev.swing >= 0 ? r1 : r0;
+        scored.push({
+          season, trade, winnerRid, loserRid, favor,
+          winnerGot: ev.swing >= 0 ? ev.myReceived : ev.mySent,
+          loserGot: ev.swing >= 0 ? ev.mySent : ev.myReceived,
+        });
+      });
+    });
+    scored.sort((a, b) => b.favor - a.favor);
+    const top = scored.slice(0, 6);
+    if (!top.length) {
+      lopCard.appendChild(el("div", { class: "empty" }, "No priceable trades found."));
+    } else {
+      const nameOf = (season, rid) => canonicalOwnerName(userDisplay(rosterToOwner(season, rid)));
+      const receivedLines = (trade, rid) => {
+        const lines = [];
+        Object.entries(trade.adds || {}).forEach(([pid, r]) => {
+          if (r === rid) lines.push(renderTradePlayerLine(pid, players));
+        });
+        (trade.draft_picks || []).forEach(dp => {
+          if (dp.owner_id === rid) lines.push(renderTradePickLine(dp, seasons, players, trade.created));
+        });
+        if (!lines.length) lines.push(el("div", { class: "trade-empty" }, "—"));
+        return lines;
+      };
+      top.forEach(t => {
+        const wName = nameOf(t.season, t.winnerRid);
+        const lName = nameOf(t.season, t.loserRid);
+        lopCard.appendChild(el("div", { class: "trade-block" },
+          el("div", { class: "trade-header" },
+            el("span", { class: "trade-date" }, wName + " won this trade"),
+            el("span", { class: "trade-meta" }, t.season.season + "  ·  ",
+              el("span", { class: "trade-value-tag delta-pos" }, "KTC +" + t.favor.toLocaleString())),
+          ),
+          el("div", { class: "trade-cols" },
+            el("div", { class: "trade-col" },
+              el("div", { class: "trade-col-label" }, wName + " got"),
+              receivedLines(t.trade, t.winnerRid),
+              el("div", { class: "pct", style: "margin-top:6px" }, "KTC " + t.winnerGot.toLocaleString())),
+            el("div", { class: "trade-col" },
+              el("div", { class: "trade-col-label" }, lName + " got"),
+              receivedLines(t.trade, t.loserRid),
+              el("div", { class: "pct", style: "margin-top:6px" }, "KTC " + t.loserGot.toLocaleString())),
+          ),
+        ));
+      });
+      lopCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
+        "Ranked by KTC's own fairness model (consolidation-adjusted) and priced as of each trade's date. " +
+        "“KTC +N” is roughly the value the losing side fell short by; only two-team trades with both sides priceable are shown."));
+    }
+  }
+  main.appendChild(lopCard);
 }
 
 function renderAdpList(rows) {

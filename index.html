@@ -4699,8 +4699,14 @@ function renderStats() {
         const [r0, r1] = trade.roster_ids;
         const winnerRid = ev.swing >= 0 ? r0 : r1;
         const loserRid = ev.swing >= 0 ? r1 : r0;
+        // Per-asset KTC values (both perspectives combined cover every asset).
+        const valByPlayer = {}, valByPick = {};
+        [...ev.gotDetail, ...ev.sentDetail].forEach(d => {
+          if (d.kind === "player") valByPlayer[d.pid] = d.value;
+          else valByPick[d.dp.season + "|" + d.dp.round + "|" + d.dp.roster_id] = d.value;
+        });
         scored.push({
-          season, trade, winnerRid, loserRid, favor,
+          season, trade, winnerRid, loserRid, favor, valByPlayer, valByPick,
           winnerGot: ev.swing >= 0 ? ev.myReceived : ev.mySent,
           loserGot: ev.swing >= 0 ? ev.mySent : ev.myReceived,
         });
@@ -4712,20 +4718,32 @@ function renderStats() {
       lopCard.appendChild(el("div", { class: "empty" }, "No priceable trades found."));
     } else {
       const nameOf = (season, rid) => canonicalOwnerName(userDisplay(rosterToOwner(season, rid)));
-      const receivedLines = (trade, rid) => {
+      // Append the asset's KTC value to a trade line.
+      const withValue = (node, value) => {
+        node.appendChild(el("span", { class: "trade-where" },
+          value ? "KTC " + Math.round(value).toLocaleString() : "—"));
+        return node;
+      };
+      const receivedLines = (t, rid) => {
+        const { trade } = t;
         const lines = [];
         Object.entries(trade.adds || {}).forEach(([pid, r]) => {
-          if (r === rid) lines.push(renderTradePlayerLine(pid, players));
+          if (r === rid) lines.push(withValue(renderTradePlayerLine(pid, players), t.valByPlayer[pid]));
         });
         (trade.draft_picks || []).forEach(dp => {
-          if (dp.owner_id === rid) lines.push(renderTradePickLine(dp, seasons, players, trade.created));
+          if (dp.owner_id === rid) lines.push(withValue(
+            renderTradePickLine(dp, seasons, players, trade.created),
+            t.valByPick[dp.season + "|" + dp.round + "|" + dp.roster_id]));
         });
         if (!lines.length) lines.push(el("div", { class: "trade-empty" }, "—"));
         return lines;
       };
+      const signed = n => (n >= 0 ? "+" : "−") + Math.abs(Math.round(n)).toLocaleString();
       top.forEach(t => {
         const wName = nameOf(t.season, t.winnerRid);
         const lName = nameOf(t.season, t.loserRid);
+        const rawGap = t.winnerGot - t.loserGot;        // naive KTC-sum gap
+        const adjustment = t.favor - rawGap;            // what the calc adds for consolidation
         lopCard.appendChild(el("div", { class: "trade-block" },
           el("div", { class: "trade-header" },
             el("span", { class: "trade-date" }, wName + " won this trade"),
@@ -4735,18 +4753,23 @@ function renderStats() {
           el("div", { class: "trade-cols" },
             el("div", { class: "trade-col" },
               el("div", { class: "trade-col-label" }, wName + " got"),
-              receivedLines(t.trade, t.winnerRid),
-              el("div", { class: "pct", style: "margin-top:6px" }, "KTC " + t.winnerGot.toLocaleString())),
+              receivedLines(t, t.winnerRid),
+              el("div", { class: "pct", style: "margin-top:6px" }, "Total KTC " + t.winnerGot.toLocaleString())),
             el("div", { class: "trade-col" },
               el("div", { class: "trade-col-label" }, lName + " got"),
-              receivedLines(t.trade, t.loserRid),
-              el("div", { class: "pct", style: "margin-top:6px" }, "KTC " + t.loserGot.toLocaleString())),
+              receivedLines(t, t.loserRid),
+              el("div", { class: "pct", style: "margin-top:6px" }, "Total KTC " + t.loserGot.toLocaleString())),
           ),
+          el("div", { class: "pct", style: "margin-top:8px" },
+            "Raw sum gap " + signed(rawGap) +
+            "  ·  consolidation adjustment " + signed(adjustment) +
+            "  ·  KTC favor +" + t.favor.toLocaleString() + " to " + wName),
         ));
       });
       lopCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
-        "Ranked by KTC's own fairness model (consolidation-adjusted) and priced as of each trade's date. " +
-        "“KTC +N” is roughly the value the losing side fell short by; only two-team trades with both sides priceable are shown."));
+        "Each asset shows its KTC value at the time of the trade. Ranked by KTC's own fairness model: " +
+        "the consolidation adjustment is how much its verdict (“KTC favor”) differs from the naive sum gap, " +
+        "since one stud outweighs several mid pieces. Only two-team trades with both sides priceable are shown."));
     }
   }
   main.appendChild(lopCard);
@@ -5154,26 +5177,26 @@ function evaluateTrade(trade, myRosterId, history, sleeperPlayers) {
     label = snap.label;
     priceSet = snap.players;
   }
-  const got = [], sent = [];
+  const got = [], sent = [], gotDetail = [], sentDetail = [];
   Object.entries(trade.adds || {}).forEach(([pid, rid]) => {
     if (rid !== myRosterId) return;
     const sp = sleeperPlayers[pid];
     if (!sp) return;
     const v = priceName(sp.name);
-    if (v) got.push(v);
+    if (v) { got.push(v); gotDetail.push({ kind: "player", pid, value: v }); }
   });
   Object.entries(trade.drops || {}).forEach(([pid, rid]) => {
     if (rid !== myRosterId) return;
     const sp = sleeperPlayers[pid];
     if (!sp) return;
     const v = priceName(sp.name);
-    if (v) sent.push(v);
+    if (v) { sent.push(v); sentDetail.push({ kind: "player", pid, value: v }); }
   });
   (trade.draft_picks || []).forEach(dp => {
     const v = pricePick(dp);
     if (!v) return;
-    if (dp.owner_id === myRosterId) got.push(v);
-    if (dp.previous_owner_id === myRosterId) sent.push(v);
+    if (dp.owner_id === myRosterId) { got.push(v); gotDetail.push({ kind: "pick", dp, value: v }); }
+    if (dp.previous_owner_id === myRosterId) { sent.push(v); sentDetail.push({ kind: "pick", dp, value: v }); }
   });
   if (!got.length && !sent.length) return null;
   const swing = Math.round(tradeFavorAmount(got, sent, maxPriceIn(priceSet)));
@@ -5182,6 +5205,8 @@ function evaluateTrade(trade, myRosterId, history, sleeperPlayers) {
     myReceived: Math.round(got.reduce((a, b) => a + b, 0)),
     swing,
     snapshot: label,
+    gotDetail,
+    sentDetail,
   };
 }
 

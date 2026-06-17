@@ -791,6 +791,9 @@
     align-items: flex-start;
     justify-content: center;
     padding: 48px 16px;
+    /* Clear the status bar / home indicator in standalone (home-screen) mode. */
+    padding-top: calc(48px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px));
     z-index: 1000;
     overflow-y: auto;
   }
@@ -853,6 +856,8 @@
     align-items: flex-start;
     justify-content: center;
     padding: 64px 16px;
+    padding-top: calc(64px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
   }
   .league-page-card {
     background: var(--panel);
@@ -1288,7 +1293,7 @@
     h1 { font-size: 17px; }
     .header-row { gap: 10px; }
     .status { font-size: 12px; gap: 6px; }
-    button.refresh { padding: 5px 10px; font-size: 12px; }
+    button.refresh { padding: 8px 13px; font-size: 12px; }
 
     nav.tabs {
       margin: 12px -14px -11px;
@@ -1358,7 +1363,27 @@
     }
     .pick-row .pick-result { text-align: center; }
 
-    footer { padding: 18px 12px; font-size: 11px; }
+    footer {
+      padding: 18px 12px;
+      padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+      font-size: 11px;
+    }
+
+    /* Use less padding so modals and the change-league page fit a phone
+       screen; keep the bottom safe-area so content clears the home indicator. */
+    .modal-overlay {
+      padding: 20px 10px;
+      padding-top: calc(20px + env(safe-area-inset-top, 0px));
+      padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    }
+    .modal-box { max-height: calc(100vh - 40px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+    .league-page {
+      padding: 28px 12px;
+      padding-top: calc(28px + env(safe-area-inset-top, 0px));
+      padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+    }
+    .league-page-card { padding: 18px; }
+    .tier-legend { grid-template-columns: 1fr; }
   }
   a.subtle { color: var(--muted); text-decoration: none; }
   a.subtle:hover { color: var(--accent); }
@@ -1367,6 +1392,8 @@
     font-size: 12px;
     text-align: center;
     padding: 24px;
+    /* Keep the footer above the home indicator in standalone mode. */
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--border);
     margin-top: 40px;
   }

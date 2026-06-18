@@ -7065,20 +7065,20 @@ function renderDraftWorkspace() {
   }
   rightCol.appendChild(myPicksCard);
 
-  // Recent activity (last 10 picks)
+  // Recent activity (all picks so far, newest first, in a scrollable list)
   const recentCard = el("div", { class: "card" }, el("h2", {}, "Recent Picks"));
   if (!d.picks.length) {
     recentCard.appendChild(el("div", { class: "empty" }, "Draft hasn't started."));
   } else {
-    const recent = d.picks.slice(-10).reverse();
-    recent.forEach(p => {
+    const list = el("div", { style: "max-height: 420px; overflow-y: auto; -webkit-overflow-scrolling: touch;" });
+    d.picks.slice().reverse().forEach(p => {
       const player = p.player_id ? d.players[p.player_id] : null;
       const rosterUser = d.users.find(u => {
         const rr = d.rosters.find(r => r.roster_id === p.roster_id);
         return rr && rr.owner_id === u.user_id;
       });
       const isMine = p.roster_id === myRosterId;
-      recentCard.appendChild(el("div", { class: "pick-history-row" + (isMine ? " is-mine" : "") },
+      list.appendChild(el("div", { class: "pick-history-row" + (isMine ? " is-mine" : "") },
         el("div", { class: "pick-history-slot" }, p.round + "." + String(p.draft_slot).padStart(2, "0")),
         el("div", {},
           player ? player.name : ("Player " + p.player_id),
@@ -7090,6 +7090,7 @@ function renderDraftWorkspace() {
           rosterUser ? canonicalOwnerName(rosterUser.team_name || rosterUser.display_name) : "—"),
       ));
     });
+    recentCard.appendChild(list);
   }
   rightCol.appendChild(recentCard);
 

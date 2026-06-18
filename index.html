@@ -5498,6 +5498,69 @@ function renderInsights() {
     table.appendChild(tb);
     main.appendChild(el("div", { class: "card" }, table));
   }
+
+  // ===== Player value movement (current KTC vs history snapshots) =====
+  const snaps = ((history && history.snapshots) || []).filter(s => s.players && Object.keys(s.players).length);
+  main.appendChild(el("div", { class: "section-header" }, "Player Value Movement",
+    el("span", { class: "section-sub" }, "KTC value swings for rostered players")));
+  if (!haveValues || !snaps.length) {
+    main.appendChild(el("div", { class: "card" }, el("div", { class: "empty" },
+      haveValues ? "Loading value history…" : "Loading KTC values…")));
+  } else {
+    const dyn = state.ktcDynasty.players;
+    const lastSnap = snaps[snaps.length - 1];
+    const owned = [];
+    latest.rosters.forEach(r => {
+      const owner = canonicalOwnerName(userDisplay(rosterToOwner(latest, r.roster_id)));
+      (r.players || []).forEach(pid => {
+        const p = players[pid];
+        if (!p || !p.position) return;
+        const norm = ktcNormalizeName(p.name);
+        const current = (dyn[norm] || {}).value || 0;
+        let peak = 0;
+        snaps.forEach(s => { const v = s.players[norm] || 0; if (v > peak) peak = v; });
+        const prev = lastSnap.players[norm] || 0;
+        owned.push({ name: p.name, pos: p.position, owner, current, prev, peak, delta: (current && prev) ? current - prev : 0 });
+      });
+    });
+    const moverRow = (o, text, cls) => el("div", { class: "trade-line" },
+      el("span", { class: "trade-player" }, o.name),
+      el("span", { class: "pos-chip " + positionClass(o.pos) }, o.pos),
+      el("span", { class: "trade-resolved" }, "· " + o.owner),
+      el("span", { class: "trade-where " + (cls || "") }, text));
+    const listCol = (label, items, fmt) => {
+      const col = el("div", { class: "trade-col" }, el("div", { class: "trade-col-label" }, label));
+      if (!items.length) col.appendChild(el("div", { class: "trade-empty" }, "—"));
+      items.forEach(o => col.appendChild(fmt(o)));
+      return col;
+    };
+
+    const movable = owned.filter(o => o.current && o.prev);
+    const risers = movable.filter(o => o.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 8);
+    const fallers = movable.filter(o => o.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 8);
+    main.appendChild(el("div", { class: "card" },
+      el("h2", {}, "Risers & Fallers"),
+      el("div", { class: "trade-cols" },
+        listCol("Risers", risers, o => moverRow(o, "+" + Math.round(o.delta).toLocaleString(), "delta-pos")),
+        listCol("Fallers", fallers, o => moverRow(o, "−" + Math.round(-o.delta).toLocaleString(), "delta-neg")),
+      ),
+      el("div", { class: "pct", style: "margin-top:8px" }, "KTC change since " + lastSnap.label + ".")));
+
+    const buyLow = owned.filter(o => o.peak >= 3000 && o.current > 0 && o.current < o.peak * 0.8)
+      .sort((a, b) => (b.peak - b.current) - (a.peak - a.current)).slice(0, 8);
+    const sellHigh = owned.filter(o => o.current >= 4000 && o.peak > 0 && o.current >= o.peak && o.delta > 0)
+      .sort((a, b) => b.current - a.current).slice(0, 8);
+    main.appendChild(el("div", { class: "card" },
+      el("h2", {}, "Buy-Low / Sell-High"),
+      el("div", { class: "trade-cols" },
+        listCol("Buy-low (off their peak)", buyLow,
+          o => moverRow(o, "−" + Math.round(o.peak - o.current).toLocaleString() + " (now " + o.current.toLocaleString() + ")", "delta-neg")),
+        listCol("Sell-high (at a new high)", sellHigh,
+          o => moverRow(o, o.current.toLocaleString() + " ATH", "delta-pos")),
+      ),
+      el("div", { class: "pct", style: "margin-top:8px" },
+        "Buy-low = 20%+ below their historical KTC peak. Sell-high = at a new high and still rising.")));
+  }
 }
 
 function renderTrades() {

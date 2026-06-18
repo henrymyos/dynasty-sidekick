@@ -5561,6 +5561,85 @@ function renderInsights() {
       el("div", { class: "pct", style: "margin-top:8px" },
         "Buy-low = 20%+ below their historical KTC peak. Sell-high = at a new high and still rising.")));
   }
+
+  // ===== Draft value: capital ROI + steals & busts (picks + current KTC) =====
+  main.appendChild(el("div", { class: "section-header" }, "Draft Value",
+    el("span", { class: "section-sub" }, "What each manager's picks became, vs the slot they spent")));
+  if (!haveValues) {
+    main.appendChild(el("div", { class: "card" }, el("div", { class: "empty" }, "Loading KTC values…")));
+  } else if (!state.picks.length) {
+    main.appendChild(el("div", { class: "card" }, el("div", { class: "empty" }, "No draft data available.")));
+  } else {
+    const dyn = state.ktcDynasty.players;
+    const nTeams = latest.rosters.length || 12;
+    const byMgr = {};
+    const pickRows = [];
+    state.picks.forEach(pk => {
+      if (!pk.player || !pk.person) return;
+      const value = (dyn[ktcNormalizeName(pk.player)] || {}).value || 0;
+      const cost = autoSlotExpectation(pk.round, pk.pickInRound || 1, nTeams);
+      const m = byMgr[pk.person] || (byMgr[pk.person] = { name: pk.person, picks: 0, value: 0, cost: 0 });
+      m.picks++; m.value += value; m.cost += cost;
+      pickRows.push({ player: pk.player, person: pk.person, year: pk.year, slot: pk.slot, pos: pk.pos, value, cost, roi: value - cost });
+    });
+
+    const rows = Object.values(byMgr).map(m => ({ ...m, roi: m.value - m.cost }));
+    if (!state.insightsRoiSort) state.insightsRoiSort = { col: "roi", dir: "desc" };
+    const rs = state.insightsRoiSort;
+    rows.sort((a, b) => {
+      const av = a[rs.col], bv = b[rs.col];
+      const cmp = av < bv ? -1 : av > bv ? 1 : (a.name < b.name ? -1 : 1);
+      return rs.dir === "asc" ? cmp : -cmp;
+    });
+    const roiTable = el("table", {},
+      el("thead", {}, el("tr", {},
+        sortHeader("Manager", "name", rs, () => { toggleSort(rs, "name"); render(); }, "", ""),
+        sortHeader("Picks", "picks", rs, () => { toggleSort(rs, "picks"); render(); }),
+        sortHeader("Value", "value", rs, () => { toggleSort(rs, "value"); render(); }),
+        sortHeader("Slot cost", "cost", rs, () => { toggleSort(rs, "cost"); render(); }),
+        sortHeader("ROI", "roi", rs, () => { toggleSort(rs, "roi"); render(); }),
+      )));
+    const rtb = el("tbody", {});
+    rows.forEach(m => rtb.appendChild(el("tr", {},
+      el("td", {}, m.name),
+      el("td", { class: "num" }, String(m.picks)),
+      el("td", { class: "num" }, Math.round(m.value).toLocaleString()),
+      el("td", { class: "num" }, Math.round(m.cost).toLocaleString()),
+      el("td", { class: "num " + (m.roi > 0 ? "delta-pos" : m.roi < 0 ? "delta-neg" : "") },
+        (m.roi > 0 ? "+" : "") + Math.round(m.roi).toLocaleString()),
+    )));
+    roiTable.appendChild(rtb);
+    main.appendChild(el("div", { class: "card" },
+      el("h2", {}, "Draft Capital ROI"),
+      roiTable,
+      el("div", { class: "pct", style: "margin-top:8px" },
+        "Value = current KTC of every player a manager drafted. Slot cost = the KTC a pick in that slot is typically worth. " +
+        "ROI = value − cost; positive means their picks returned more than the draft slots they spent.")));
+
+    const graded = pickRows.filter(p => p.cost > 0);
+    const steals = graded.slice().sort((a, b) => b.roi - a.roi).slice(0, 8);
+    const busts = graded.slice().sort((a, b) => a.roi - b.roi).slice(0, 8);
+    const pickRow = (p, cls) => el("div", { class: "trade-line" },
+      el("span", { class: "trade-player" }, p.player),
+      p.pos ? el("span", { class: "pos-chip " + positionClass(p.pos) }, p.pos) : null,
+      el("span", { class: "trade-resolved" }, "· " + p.person + " · " + (p.slot || p.year)),
+      el("span", { class: "trade-where " + cls }, (p.roi >= 0 ? "+" : "−") + Math.round(Math.abs(p.roi)).toLocaleString()));
+    const stealCol = (label, items, cls) => {
+      const col = el("div", { class: "trade-col" }, el("div", { class: "trade-col-label" }, label));
+      if (!items.length) col.appendChild(el("div", { class: "trade-empty" }, "—"));
+      items.forEach(p => col.appendChild(pickRow(p, cls)));
+      return col;
+    };
+    main.appendChild(el("div", { class: "card" },
+      el("h2", {}, "All-Time Steals & Busts"),
+      el("div", { class: "trade-cols" },
+        stealCol("Steals (value ≫ slot)", steals, "delta-pos"),
+        stealCol("Busts (slot ≫ value)", busts, "delta-neg"),
+      ),
+      el("div", { class: "pct", style: "margin-top:8px" },
+        "Each pick's ROI = the player's current KTC value minus the slot's typical cost. " +
+        "Current value, so players who have since aged out show as busts.")));
+  }
 }
 
 function renderTrades() {

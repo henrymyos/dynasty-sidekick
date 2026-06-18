@@ -2292,6 +2292,22 @@ function renderRankings() {
     return;
   }
 
+  // Value-weighted average age per roster (older studs weigh more than scrubs).
+  const latestSzn = state.sleeper.seasons[state.sleeper.seasons.length - 1];
+  const dynPlayers = state.ktcDynasty.players;
+  const ageByRid = {};
+  latestSzn.rosters.forEach(rr => {
+    let wsum = 0, asum = 0;
+    (rr.players || []).forEach(pid => {
+      const p = state.sleeper.players[pid];
+      if (!p || p.age == null) return;
+      const v = (dynPlayers[ktcNormalizeName(p.name)] || {}).value || 0;
+      if (!v) return;
+      wsum += v; asum += v * p.age;
+    });
+    ageByRid[rr.roster_id] = wsum ? asum / wsum : null;
+  });
+
   const buckets = { Contender: 0, Middler: 0, Reloader: 0 };
   ranked.forEach(r => { buckets[classifyManager(r.cRank, ranked.length).label]++; });
   const lede = el("div", { class: "card-lede" });
@@ -2315,6 +2331,7 @@ function renderRankings() {
       el("th", { class: "num tight" }, "Picks"),
       el("th", { class: "num tight" }, "Total"),
       el("th", { class: "num tight" }, "Starters"),
+      el("th", { class: "num tight" }, "Age"),
       el("th", {}, "Status"),
     )),
   );
@@ -2329,6 +2346,7 @@ function renderRankings() {
       el("td", { class: "num tight" }, Math.round(r.pickValue).toLocaleString()),
       el("td", { class: "num tight" }, Math.round(r.totalValue).toLocaleString()),
       el("td", { class: "num tight" }, Math.round(r.optimalValue).toLocaleString()),
+      el("td", { class: "num tight" }, ageByRid[r.roster_id] != null ? ageByRid[r.roster_id].toFixed(1) : "—"),
       el("td", {}, el("span", { class: "pill " + cls.pill }, cls.label)),
     ));
   });
@@ -2339,6 +2357,7 @@ function renderRankings() {
     "(originally theirs minus traded away plus acquired). Pick tier (Early / Mid / Late) is set by the current draft's slot order " +
     "for 2026 picks; 2027/2028 pick tiers are projected from the original owner's current contender rank — strong lineups project late picks, weak lineups early. " +
     "Starters = KTC value of the optimal starting lineup (1 QB, 2 RB, 3 WR, 1 TE, 1 FLEX, 1 SF). " +
+    "Age = value-weighted average age of the roster (older studs weigh more than bench depth). " +
     "Status is set by Contender rank (starting-lineup strength): top half of the league → Contender, " +
     "third quarter → Middler, bottom quarter → Reloader. In a 12-team league that's #1-6 / #7-9 / #10-12."
   ));
@@ -5673,70 +5692,6 @@ function renderInsights() {
       el("div", { class: "pct", style: "margin-top:8px" },
         "Each pick's ROI = the player's KTC 3 years after the draft minus the slot's typical cost. " +
         "Only picks at least 3 years old are shown, so recent classes aren't judged before they've developed.")));
-  }
-
-  // ===== Team profiles / contention windows =====
-  main.appendChild(el("div", { class: "section-header" }, "Team Profiles",
-    el("span", { class: "section-sub" }, "Roster value, draft capital, age, and contention window")));
-  if (!haveValues) {
-    main.appendChild(el("div", { class: "card" }, el("div", { class: "empty" }, "Loading KTC values…")));
-  } else {
-    const ranked = computeManagerRankings() || [];
-    const dyn = state.ktcDynasty.players;
-    const ageByRid = {};
-    latest.rosters.forEach(r => {
-      let wsum = 0, asum = 0;
-      (r.players || []).forEach(pid => {
-        const p = players[pid];
-        if (!p || p.age == null) return;
-        const v = (dyn[ktcNormalizeName(p.name)] || {}).value || 0;
-        if (!v) return;
-        wsum += v; asum += v * p.age;
-      });
-      ageByRid[r.roster_id] = wsum ? asum / wsum : null;
-    });
-    const n = ranked.length;
-    const rrows = ranked.map(r => ({
-      name: r.name, type: classifyManager(r.cRank, n).label,
-      roster: r.playerValue, starters: r.optimalValue, picks: r.pickValue,
-      totalValue: r.totalValue, age: ageByRid[r.roster_id],
-    }));
-    if (!state.insightsTeamSort) state.insightsTeamSort = { col: "totalValue", dir: "desc" };
-    const ps = state.insightsTeamSort;
-    rrows.sort((a, b) => {
-      const av = a[ps.col] == null ? -Infinity : a[ps.col];
-      const bv = b[ps.col] == null ? -Infinity : b[ps.col];
-      const cmp = av < bv ? -1 : av > bv ? 1 : (a.name < b.name ? -1 : 1);
-      return ps.dir === "asc" ? cmp : -cmp;
-    });
-    const pill = t => el("span", { class: "pill " + (t === "Contender" ? "pill-strong" : t === "Reloader" ? "pill-weak" : "pill-avg") }, t);
-    const tt = el("table", {},
-      el("thead", {}, el("tr", {},
-        sortHeader("Manager", "name", ps, () => { toggleSort(ps, "name"); render(); }, "", ""),
-        el("th", {}, "Window"),
-        sortHeader("Roster", "roster", ps, () => { toggleSort(ps, "roster"); render(); }),
-        sortHeader("Starters", "starters", ps, () => { toggleSort(ps, "starters"); render(); }),
-        sortHeader("Picks", "picks", ps, () => { toggleSort(ps, "picks"); render(); }),
-        sortHeader("Total", "totalValue", ps, () => { toggleSort(ps, "totalValue"); render(); }),
-        sortHeader("Age", "age", ps, () => { toggleSort(ps, "age"); render(); }),
-      )));
-    const ttb = el("tbody", {});
-    rrows.forEach(r => ttb.appendChild(el("tr", {},
-      el("td", {}, r.name),
-      el("td", {}, pill(r.type)),
-      el("td", { class: "num" }, Math.round(r.roster).toLocaleString()),
-      el("td", { class: "num" }, Math.round(r.starters).toLocaleString()),
-      el("td", { class: "num" }, Math.round(r.picks).toLocaleString()),
-      el("td", { class: "num" }, Math.round(r.totalValue).toLocaleString()),
-      el("td", { class: "num" }, r.age != null ? r.age.toFixed(1) : "—"),
-    )));
-    tt.appendChild(ttb);
-    main.appendChild(el("div", { class: "card" },
-      el("h2", {}, "Team Profiles"),
-      el("div", { style: "overflow-x:auto" }, tt),
-      el("div", { class: "pct", style: "margin-top:8px" },
-        "Window from starting-lineup strength: Contender (top half), Middler, Reloader. " +
-        "Starters = best-lineup KTC; Picks = projected future-pick capital; Age is value-weighted.")));
   }
 }
 

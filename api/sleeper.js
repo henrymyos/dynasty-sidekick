@@ -125,6 +125,7 @@ export default async function handler(req, res) {
       // don't assign draft slots in reverse order of finish.
       roster_positions: sd.league.roster_positions || [],
       playoff_teams: (sd.league.settings && sd.league.settings.playoff_teams) || null,
+      playoff_week_start: (sd.league.settings && sd.league.settings.playoff_week_start) || null,
       // TE reception bonus → which KTC value scale (tep/tepp/teppp) applies.
       bonus_rec_te: (sd.league.scoring_settings && sd.league.scoring_settings.bonus_rec_te) || 0,
       winners_bracket: (sd.winnersBracket || []).map(m => ({

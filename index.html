@@ -6156,6 +6156,85 @@ function buildH2HCard(title, names, matrix, totalRow, note) {
   return card;
 }
 
+// Schedule luck: actual wins (from weekly head-to-head) vs expected wins
+// (all-play win rate). Needs weekly matchup data from /api/sleeper.
+function renderScheduleLuck(main) {
+  if (!state.sleeper) return;
+  const luck = {};
+  const mgrOf = name => luck[name] || (luck[name] = { name, games: 0, actual: 0, expected: 0 });
+  let any = false;
+  state.sleeper.seasons.forEach(season => {
+    const weeks = season.matchups || [];
+    if (!weeks.length) return;
+    const regGames = Math.max(0, ...season.rosters.map(r => (r.wins || 0) + (r.losses || 0) + (r.ties || 0)));
+    if (!regGames) return;
+    const nameByRid = {};
+    season.rosters.forEach(r => {
+      nameByRid[r.roster_id] = canonicalOwnerName(userDisplay(rosterToOwner(season, r.roster_id)));
+    });
+    for (let w = 0; w < regGames && w < weeks.length; w++) {
+      const entries = (weeks[w] || []).filter(e => typeof e.points === "number");
+      if (entries.length < 2 || entries.some(e => e.points <= 0)) continue;  // skip unplayed/partial weeks
+      any = true;
+      const k = entries.length;
+      entries.forEach(e => {
+        let beat = 0, tied = 0;
+        entries.forEach(o => {
+          if (o === e) return;
+          if (e.points > o.points) beat++; else if (e.points === o.points) tied++;
+        });
+        const m = mgrOf(nameByRid[e.roster_id] || "—");
+        m.expected += (beat + 0.5 * tied) / (k - 1);
+        m.games += 1;
+      });
+      const byMatch = {};
+      entries.forEach(e => { (byMatch[e.matchup_id] || (byMatch[e.matchup_id] = [])).push(e); });
+      Object.values(byMatch).forEach(pair => {
+        if (pair.length !== 2) return;
+        const a = mgrOf(nameByRid[pair[0].roster_id] || "—");
+        const b = mgrOf(nameByRid[pair[1].roster_id] || "—");
+        if (pair[0].points > pair[1].points) a.actual += 1;
+        else if (pair[1].points > pair[0].points) b.actual += 1;
+        else { a.actual += 0.5; b.actual += 0.5; }
+      });
+    }
+  });
+  const rows = Object.values(luck).filter(r => r.games > 0);
+  if (!any || !rows.length) return;  // no matchup data yet (API not redeployed) — render nothing
+  rows.forEach(r => r.luck = r.actual - r.expected);
+  if (!state.luckSort) state.luckSort = { col: "luck", dir: "desc" };
+  const ls = state.luckSort;
+  rows.sort((a, b) => {
+    const av = a[ls.col], bv = b[ls.col];
+    const cmp = av < bv ? -1 : av > bv ? 1 : (a.name < b.name ? -1 : 1);
+    return ls.dir === "asc" ? cmp : -cmp;
+  });
+  const table = el("table", {},
+    el("thead", {}, el("tr", {},
+      sortHeader("Manager", "name", ls, () => { toggleSort(ls, "name"); render(); }, "", ""),
+      sortHeader("Games", "games", ls, () => { toggleSort(ls, "games"); render(); }),
+      sortHeader("Actual W", "actual", ls, () => { toggleSort(ls, "actual"); render(); }),
+      sortHeader("Expected W", "expected", ls, () => { toggleSort(ls, "expected"); render(); }),
+      sortHeader("Luck", "luck", ls, () => { toggleSort(ls, "luck"); render(); }),
+    )));
+  const tb = el("tbody", {});
+  rows.forEach(r => tb.appendChild(el("tr", {},
+    el("td", {}, r.name),
+    el("td", { class: "num" }, String(r.games)),
+    el("td", { class: "num" }, r.actual.toFixed(1)),
+    el("td", { class: "num" }, r.expected.toFixed(1)),
+    el("td", { class: "num " + (r.luck > 0.5 ? "delta-pos" : r.luck < -0.5 ? "delta-neg" : "") },
+      (r.luck > 0 ? "+" : "") + r.luck.toFixed(1)),
+  )));
+  table.appendChild(tb);
+  main.appendChild(el("div", { class: "card" },
+    el("h2", {}, "Schedule Luck"),
+    table,
+    el("div", { class: "hist-note" },
+      "Expected wins = your all-play win rate each week (how you'd fare vs the whole league). " +
+      "Luck = actual − expected over all regular-season weeks; positive = won more than your scoring deserved.")));
+}
+
 function renderHistory() {
   const main = document.getElementById("main");
   main.innerHTML = "";
@@ -6310,6 +6389,9 @@ function renderHistory() {
   recCard.appendChild(el("div", { class: "hist-note" },
     "Champion highlighted gold, runner-up blue."));
   main.appendChild(recCard);
+
+  // ----- Schedule luck / expected wins (from weekly matchups) -----
+  renderScheduleLuck(main);
 
   // ----- All-time record sheet (includes pre-Sleeper seasons; this league only) -----
   if (!IS_DEFAULT_LEAGUE) return;

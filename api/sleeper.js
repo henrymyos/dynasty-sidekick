@@ -56,7 +56,15 @@ async function fetchSeason(lg) {
   const transactions = weekResults.flat();
   const trades = transactions.filter(t => t.type === "trade" && t.status === "complete");
 
-  return { league: lg, users, rosters, drafts: draftsWithPicks, trades, winnersBracket };
+  // Weekly matchups (per-team points + matchup_id pairing) for schedule-luck /
+  // expected-wins analysis. Empty arrays for unplayed/future weeks.
+  const matchups = await Promise.all(
+    Array.from({ length: 18 }, (_, i) =>
+      get(`/league/${lg.league_id}/matchups/${i + 1}`).catch(() => [])
+    )
+  );
+
+  return { league: lg, users, rosters, drafts: draftsWithPicks, trades, winnersBracket, matchups };
 }
 
 let playersCache = null;
@@ -172,6 +180,8 @@ export default async function handler(req, res) {
           previous_owner_id: dp.previous_owner_id,
         })),
       })),
+      matchups: (sd.matchups || []).map(week =>
+        (week || []).map(m => ({ roster_id: m.roster_id, matchup_id: m.matchup_id, points: m.points }))),
     }));
 
     res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=86400");

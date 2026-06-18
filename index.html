@@ -5080,6 +5080,18 @@ function snapshot2021Picks(history) {
     && Object.keys(x.picks).some(k => k.startsWith("2021|")));
   return s ? s.picks : null;
 }
+
+// A pick whose season is beyond the snapshot's horizon (too far out to be
+// listed yet) is valued like the nearest earlier season the snapshot does
+// cover — i.e. use the year before to predict it.
+function pickValueWithFallback(picksMap, season, round) {
+  const base = parseInt(season, 10);
+  for (let s = base; s >= base - 6; s--) {
+    const v = avgPickValueFromMap(picksMap, s, round);
+    if (v) return v;
+  }
+  return null;
+}
 function lookupPickValue(snap, season, round) {
   return snap ? avgPickValueFromMap(snap.picks, season, round) : null;
 }
@@ -5175,7 +5187,7 @@ function evaluateTrade(trade, myRosterId, history, sleeperPlayers) {
     pricePick = dp => {
       const tier = projectedPickTier(dp.roster_id);
       return picksMap[`${dp.season}|${tier}|${dp.round}`]
-        || avgPickValueFromMap(picksMap, dp.season, dp.round) || 0;
+        || pickValueWithFallback(picksMap, dp.season, dp.round) || 0;
     };
     label = "current";
     priceSet = dyn;
@@ -5189,7 +5201,8 @@ function evaluateTrade(trade, myRosterId, history, sleeperPlayers) {
       if (parseInt(dp.season, 10) === 2020 && picks2021) {
         return avgPickValueFromMap(picks2021, 2021, dp.round) || 0;
       }
-      return lookupPickValue(snap, dp.season, dp.round) || 0;
+      // Picks beyond the snapshot's horizon fall back to the nearest earlier year.
+      return pickValueWithFallback(snap.picks, dp.season, dp.round) || 0;
     };
     label = snap.label;
     priceSet = snap.players;

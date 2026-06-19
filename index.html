@@ -5899,7 +5899,7 @@ function renderTradeFeedback() {
   main.appendChild(controls);
 
   main.appendChild(el("div", { class: "section-header" }, "Trade Feedback",
-    el("span", { class: "section-sub" }, "Instant breakdown of each trade — why each side did it and whether it helped (optional AI deep-dive)")));
+    el("span", { class: "section-sub" }, "Instant breakdown of each trade — why each side did it and whether it helped")));
 
   const filtered = state.feedbackTeam === "__all__" ? all : all.filter(t => t.names.includes(state.feedbackTeam));
   if (!filtered.length) {
@@ -5982,33 +5982,6 @@ function templateTradeAnalysis(item, players, evByRid, typeForName) {
   return paras.join("\n\n");
 }
 
-function buildTradeContext(item, players, evByRid, typeForName) {
-  const { season, trade } = item;
-  const describe = d => {
-    if (d.kind === "player") {
-      const p = players[d.pid];
-      return (p ? p.name : "Player " + d.pid) + (p && p.position ? " " + p.position : "") + " (KTC " + Math.round(d.value) + ")";
-    }
-    const dp = d.dp;
-    return dp.season + " round " + dp.round + " pick (KTC " + Math.round(d.value) + ")";
-  };
-  const lines = ["Completed dynasty trade on " + fmtDate(trade.created) + " (" + season.season + " season)."];
-  (trade.roster_ids || []).forEach(rid => {
-    const nm = canonicalOwnerName(userDisplay(rosterToOwner(season, rid)));
-    const t = typeForName[nm] ? " — " + typeForName[nm] : "";
-    const ev = evByRid[rid];
-    const got = ev ? ev.gotDetail.map(describe) : [];
-    const gave = ev ? ev.sentDetail.map(describe) : [];
-    lines.push("");
-    lines.push(nm + t + ":");
-    lines.push("  Received: " + (got.join(", ") || "nothing of tracked KTC value"));
-    lines.push("  Gave up: " + (gave.join(", ") || "nothing of tracked KTC value"));
-    if (ev) lines.push("  KTC: received ~" + ev.myReceived + ", gave ~" + ev.mySent +
-      " (net " + (ev.swing >= 0 ? "+" : "") + ev.swing + " in their favor).");
-  });
-  return lines.join("\n");
-}
-
 function buildFeedbackBlock(item, players, seasons, typeForName) {
   const { season, trade, names } = item;
   const block = el("div", { class: "trade-block" });
@@ -6053,45 +6026,8 @@ function buildFeedbackBlock(item, players, seasons, typeForName) {
   });
   block.appendChild(cols);
 
-  // Free, instant, template-based analysis (no AI, no cost) — always shown.
+  // Free, instant, template-based analysis (no AI, no cost).
   block.appendChild(renderAnalysisText(templateTradeAnalysis(item, players, evByRid, typeForName)));
-
-  // Optional richer AI write-up (requires ANTHROPIC_API_KEY), cached per trade.
-  const txid = trade.tx_id || (season.season + "-" + (trade.created || 0));
-  const wrap = el("div", { style: "margin-top:8px" });
-  const showAI = txt => {
-    wrap.innerHTML = "";
-    wrap.appendChild(el("div", { class: "pct", style: "margin-top:2px" }, "AI write-up:"));
-    wrap.appendChild(renderAnalysisText(txt));
-  };
-  const cached = state.tradeFeedbackCache && state.tradeFeedbackCache[txid];
-  if (cached) {
-    showAI(cached);
-  } else {
-    const btn = el("button", { class: "refresh", type: "button" }, "✨ Deeper AI write-up");
-    btn.addEventListener("click", () => {
-      btn.disabled = true;
-      btn.textContent = "Analyzing…";
-      fetch("/api/trade-feedback", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ context: buildTradeContext(item, players, evByRid, typeForName), tradeId: txid }),
-      })
-        .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.error || "HTTP " + r.status); return d; })
-        .then(d => {
-          state.tradeFeedbackCache = state.tradeFeedbackCache || {};
-          state.tradeFeedbackCache[txid] = d.analysis;
-          showAI(d.analysis);
-        })
-        .catch(e => {
-          btn.disabled = false;
-          btn.textContent = "✨ Deeper AI write-up";
-          wrap.appendChild(el("div", { class: "pct", style: "color:var(--miss); margin-top:6px" }, e.message));
-        });
-    });
-    wrap.appendChild(btn);
-  }
-  block.appendChild(wrap);
   return block;
 }
 

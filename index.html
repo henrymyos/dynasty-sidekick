@@ -4709,6 +4709,7 @@ function renderStats() {
     seasons.forEach(season => {
       (season.trades || []).forEach(trade => {
         if (trade.tx_id != null) { if (seenTx.has(trade.tx_id)) return; seenTx.add(trade.tx_id); }
+        if ((trade.draft_picks || []).some(dp => parseInt(dp.season, 10) === 2019)) return;  // startup picks, no KTC value
         if (!trade.roster_ids || trade.roster_ids.length !== 2) return;  // 2-team trades only
         const ev = evaluateTrade(trade, trade.roster_ids[0], state.tradeHistory, players);
         if (!ev) return;
@@ -5463,6 +5464,8 @@ function renderInsights() {
   const mgr = name => ledger[name] || (ledger[name] = { name, trades: 0, net: 0, won: 0, lost: 0 });
   seasons.forEach(season => {
     (season.trades || []).forEach(trade => {
+      // 2019 picks were startup-draft picks with no KTC value — skip those trades.
+      if ((trade.draft_picks || []).some(dp => parseInt(dp.season, 10) === 2019)) return;
       const names = (trade.roster_ids || []).map(rid =>
         canonicalOwnerName(userDisplay(rosterToOwner(season, rid))));
       for (let i = 0; i < names.length; i++)

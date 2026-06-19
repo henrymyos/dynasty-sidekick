@@ -5699,6 +5699,7 @@ function renderTrades() {
   const main = document.getElementById("main");
   main.innerHTML = "";
   ensureSleeperLoaded();
+  ensureKtcDynastyLoaded();
   ensureTradeHistoryLoaded();
 
   if (state.sleeperLoading) {
@@ -5714,156 +5715,11 @@ function renderTrades() {
     return;
   }
 
-  const { seasons, players } = state.sleeper;
-  // Use the current (latest) season's users as the canonical roster of managers
-  const currentSeason = seasons[seasons.length - 1];
-  const allUsers = sortUsersHenryFirst(currentSeason.users);
-
-  if (state.tradesUserId == null && allUsers.length) state.tradesUserId = allUsers[0].user_id;
-
-  const userOpts = allUsers.map(u => ({ value: u.user_id, label: canonicalOwnerName(userDisplay(u)) }));
-  const controls = el("div", { class: "controls" });
-  controls.appendChild(customSelect(userOpts, state.tradesUserId, v => {
-    state.tradesUserId = v;
-    render();
-  }));
-  main.appendChild(controls);
-
-  const selectedUser = allUsers.find(u => u.user_id === state.tradesUserId);
-
-  // Build a flat list of trades this user was involved in across all seasons.
-  // For each season, map user_id -> roster_id in that season.
-  const userTrades = [];
-  seasons.forEach(season => {
-    const myRoster = season.rosters.find(r => r.owner_id === state.tradesUserId);
-    if (!myRoster) return;
-    const myRosterId = myRoster.roster_id;
-    season.trades.forEach(t => {
-      if (!t.roster_ids.includes(myRosterId)) return;
-      userTrades.push({ season, trade: t, myRosterId });
-    });
-  });
-  userTrades.sort((a, b) => b.trade.created - a.trade.created);
-
-  // Summary stats
-  let playersReceived = 0, playersSent = 0, picksReceived = 0, picksSent = 0;
-  userTrades.forEach(({ trade, myRosterId }) => {
-    Object.entries(trade.adds).forEach(([, rid]) => { if (rid === myRosterId) playersReceived++; });
-    Object.entries(trade.drops).forEach(([, rid]) => { if (rid === myRosterId) playersSent++; });
-    trade.draft_picks.forEach(dp => {
-      if (dp.owner_id === myRosterId) picksReceived++;
-      if (dp.previous_owner_id === myRosterId) picksSent++;
-    });
-  });
-  const stats = el("div", { class: "stat-grid" },
-    el("div", { class: "stat" }, el("div", { class: "stat-label" }, "Trades"), el("div", { class: "stat-value" }, String(userTrades.length))),
-    el("div", { class: "stat" }, el("div", { class: "stat-label" }, "Players In"), el("div", { class: "stat-value" }, String(playersReceived))),
-    el("div", { class: "stat" }, el("div", { class: "stat-label" }, "Players Out"), el("div", { class: "stat-value" }, String(playersSent))),
-    el("div", { class: "stat" }, el("div", { class: "stat-label" }, "Picks In"), el("div", { class: "stat-value" }, String(picksReceived))),
-    el("div", { class: "stat" }, el("div", { class: "stat-label" }, "Picks Out"), el("div", { class: "stat-value" }, String(picksSent))),
-  );
-  main.appendChild(stats);
-
-  const card = el("div", { class: "card" }, el("h2", {}, canonicalOwnerName(userDisplay(selectedUser)) + " — Trade History"));
-
-  if (!userTrades.length) {
-    card.appendChild(el("div", { class: "empty" }, "No trades found for this manager."));
-    main.appendChild(card);
-    return;
-  }
-
-  userTrades.forEach(({ season, trade, myRosterId }) => {
-    const otherRosterIds = trade.roster_ids.filter(r => r !== myRosterId);
-    const otherNames = otherRosterIds.map(rid => canonicalOwnerName(userDisplay(rosterToOwner(season, rid)))).join(", ");
-
-    const block = el("div", { class: "trade-block" });
-    const header = el("div", { class: "trade-header" },
-      el("span", { class: "trade-date" }, fmtDate(trade.created)),
-      el("span", { class: "trade-meta" }, season.season + " season  ·  with " + (otherNames || "—")),
-    );
-    const evalResult = evaluateTrade(trade, myRosterId, state.tradeHistory, state.sleeper && state.sleeper.players);
-    if (evalResult && (evalResult.mySent > 0 || evalResult.myReceived > 0)) {
-      const swing = evalResult.swing;
-      const sign = swing >= 0 ? "+" : "";
-      const tag = el("span", {
-        class: "trade-value-tag " + (swing >= 0 ? "delta-pos" : "delta-neg"),
-        title: `Got ${evalResult.myReceived} · Gave ${evalResult.mySent} (KTC ${evalResult.snapshot}, consolidation-adjusted)`,
-      }, `${sign}${swing} KTC`);
-      header.appendChild(tag);
-    }
-    block.appendChild(header);
-
-    // Per-asset KTC values, from the same valuation used for the swing tag.
-    const valByPlayer = {}, valByPick = {};
-    if (evalResult) {
-      [...evalResult.gotDetail, ...evalResult.sentDetail].forEach(d => {
-        if (d.kind === "player") valByPlayer[d.pid] = d.value;
-        else valByPick[d.dp.season + "|" + d.dp.round + "|" + d.dp.roster_id] = d.value;
-      });
-    }
-    const withValue = (node, value) => {
-      node.appendChild(el("span", { class: "trade-where" },
-        value ? "KTC " + Math.round(value).toLocaleString() : "—"));
-      return node;
-    };
-
-    const cols = el("div", { class: "trade-cols" });
-    const received = el("div", { class: "trade-col" }, el("div", { class: "trade-col-label" }, "Received"));
-    const sent = el("div", { class: "trade-col" }, el("div", { class: "trade-col-label" }, "Sent"));
-
-    // Players
-    Object.entries(trade.adds).forEach(([pid, rid]) => {
-      if (rid !== myRosterId) return;
-      received.appendChild(withValue(renderTradePlayerLine(pid, players), valByPlayer[pid]));
-    });
-    Object.entries(trade.drops).forEach(([pid, rid]) => {
-      if (rid !== myRosterId) return;
-      sent.appendChild(withValue(renderTradePlayerLine(pid, players), valByPlayer[pid]));
-    });
-
-    // Picks
-    trade.draft_picks.forEach(dp => {
-      const pv = valByPick[dp.season + "|" + dp.round + "|" + dp.roster_id];
-      if (dp.owner_id === myRosterId) {
-        received.appendChild(withValue(renderTradePickLine(dp, seasons, players, trade.created), pv));
-      }
-      if (dp.previous_owner_id === myRosterId) {
-        sent.appendChild(withValue(renderTradePickLine(dp, seasons, players, trade.created), pv));
-      }
-    });
-
-    if (!received.children.length || received.children.length === 1) {
-      received.appendChild(el("div", { class: "trade-empty" }, "—"));
-    }
-    if (!sent.children.length || sent.children.length === 1) {
-      sent.appendChild(el("div", { class: "trade-empty" }, "—"));
-    }
-    cols.appendChild(received);
-    cols.appendChild(sent);
-    block.appendChild(cols);
-    card.appendChild(block);
-  });
-
-  main.appendChild(card);
-}
-
-// ---------- Trade Feedback: AI breakdown of every trade ----------
-function renderTradeFeedback() {
-  const main = document.getElementById("main");
-  main.innerHTML = "";
-  ensureSleeperLoaded();
-  ensureKtcDynastyLoaded();
-  ensureTradeHistoryLoaded();
-  if (!state.sleeper) {
-    main.appendChild(el("div", { class: "empty" },
-      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading league data…"));
-    return;
-  }
   const seasons = state.sleeper.seasons;
   const latest = seasons[seasons.length - 1];
   const players = state.sleeper.players;
 
-  // Contention window per manager (from the latest season's rankings).
+  // Contention window per manager (latest-season rankings) for the analysis.
   const typeForName = {};
   const ranked = state.ktcDynasty ? computeManagerRankings() : null;
   if (ranked) {
@@ -5874,7 +5730,7 @@ function renderTradeFeedback() {
     });
   }
 
-  // Every completed trade, newest first.
+  // Every completed trade across all seasons, newest first.
   const all = [];
   const seen = new Set();
   seasons.forEach(season => {
@@ -5886,22 +5742,24 @@ function renderTradeFeedback() {
   });
   all.sort((a, b) => (b.trade.created || 0) - (a.trade.created || 0));
 
-  // Team filter.
+  // Owner filter — defaults to every trade.
   const teamNames = latest.rosters
     .map(r => canonicalOwnerName(userDisplay(rosterToOwner(latest, r.roster_id))))
     .sort((a, b) => a.localeCompare(b));
-  if (!state.feedbackTeam) state.feedbackTeam = "__all__";
+  if (!state.tradesTeam) state.tradesTeam = "__all__";
   const controls = el("div", { class: "controls" });
   controls.appendChild(customSelect(
     [{ value: "__all__", label: "All teams" }, ...teamNames.map(n => ({ value: n, label: n }))],
-    state.feedbackTeam,
-    v => { state.feedbackTeam = v; render(); }));
+    state.tradesTeam,
+    v => { state.tradesTeam = v; render(); }));
   main.appendChild(controls);
 
-  main.appendChild(el("div", { class: "section-header" }, "Trade Feedback",
-    el("span", { class: "section-sub" }, "Instant breakdown of each trade — why each side did it and whether it helped")));
+  const filtered = state.tradesTeam === "__all__" ? all : all.filter(t => t.names.includes(state.tradesTeam));
+  main.appendChild(el("div", { class: "section-header" },
+    state.tradesTeam === "__all__" ? "All Trades" : state.tradesTeam + " — Trades",
+    el("span", { class: "section-sub" },
+      filtered.length + " trade" + (filtered.length === 1 ? "" : "s") + " — why each side did it and whether it helped")));
 
-  const filtered = state.feedbackTeam === "__all__" ? all : all.filter(t => t.names.includes(state.feedbackTeam));
   if (!filtered.length) {
     main.appendChild(el("div", { class: "card" }, el("div", { class: "empty" }, "No trades found.")));
     return;
@@ -6762,7 +6620,6 @@ const WORKSPACE_TABS = {
     { view: "trades", label: "Trades" },
     { view: "history", label: "History" },
     { view: "insights", label: "Insights" },
-    { view: "feedback", label: "Trade Feedback" },
   ],
   team: [
     { view: "liveDraft", label: "Live Draft" },
@@ -7502,7 +7359,6 @@ function render() {
     case "trades": renderTrades(); break;
     case "history": renderHistory(); break;
     case "insights": renderInsights(); break;
-    case "feedback": renderTradeFeedback(); break;
     case "overview": renderOverview(); break;
     // Team workspace
     case "teams": renderTeams(); break;

@@ -5891,12 +5891,19 @@ function buildFeedbackBlock(item, players, seasons, typeAt) {
   const header = el("div", { class: "trade-header" },
     el("span", { class: "trade-date" }, names.join("  ↔  ")),
     el("span", { class: "trade-meta" }, fmtDate(trade.created) + "  ·  " + season.season + " season"));
-  // Net KTC verdict — from the filtered team's side when one is selected,
-  // otherwise the first team listed. Green = came out ahead, red = lost.
+  // Net KTC verdict — from the filtered team's side when one is selected
+  // (green = ahead, red = lost). With no filter, show the winner, so it's
+  // always green (who came out ahead, by how much).
   let perspRid = (trade.roster_ids || [])[0];
   if (state.tradesTeam && state.tradesTeam !== "__all__") {
     const m = (trade.roster_ids || []).find(rid => canonicalOwnerName(userDisplay(rosterToOwner(season, rid))) === state.tradesTeam);
     if (m != null) perspRid = m;
+  } else {
+    let bestSwing = -Infinity;
+    (trade.roster_ids || []).forEach(rid => {
+      const ev = evByRid[rid];
+      if (ev && ev.swing > bestSwing) { bestSwing = ev.swing; perspRid = rid; }
+    });
   }
   const ev0 = evByRid[perspRid];
   if (ev0 && (ev0.mySent > 0 || ev0.myReceived > 0)) {

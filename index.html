@@ -5847,6 +5847,180 @@ function renderTrades() {
   main.appendChild(card);
 }
 
+// ---------- Trade Feedback: AI breakdown of every trade ----------
+function renderTradeFeedback() {
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  ensureSleeperLoaded();
+  ensureKtcDynastyLoaded();
+  ensureTradeHistoryLoaded();
+  if (!state.sleeper) {
+    main.appendChild(el("div", { class: "empty" },
+      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading league data…"));
+    return;
+  }
+  const seasons = state.sleeper.seasons;
+  const latest = seasons[seasons.length - 1];
+  const players = state.sleeper.players;
+
+  // Contention window per manager (from the latest season's rankings).
+  const typeForName = {};
+  const ranked = state.ktcDynasty ? computeManagerRankings() : null;
+  if (ranked) {
+    const typeByRid = {};
+    ranked.forEach(r => { typeByRid[r.roster_id] = classifyManager(r.cRank, ranked.length).label; });
+    latest.rosters.forEach(r => {
+      typeForName[canonicalOwnerName(userDisplay(rosterToOwner(latest, r.roster_id)))] = typeByRid[r.roster_id] || null;
+    });
+  }
+
+  // Every completed trade, newest first.
+  const all = [];
+  const seen = new Set();
+  seasons.forEach(season => {
+    (season.trades || []).forEach(trade => {
+      if (trade.tx_id != null) { if (seen.has(trade.tx_id)) return; seen.add(trade.tx_id); }
+      const names = (trade.roster_ids || []).map(rid => canonicalOwnerName(userDisplay(rosterToOwner(season, rid))));
+      all.push({ season, trade, names });
+    });
+  });
+  all.sort((a, b) => (b.trade.created || 0) - (a.trade.created || 0));
+
+  // Team filter.
+  const teamNames = latest.rosters
+    .map(r => canonicalOwnerName(userDisplay(rosterToOwner(latest, r.roster_id))))
+    .sort((a, b) => a.localeCompare(b));
+  if (!state.feedbackTeam) state.feedbackTeam = "__all__";
+  const controls = el("div", { class: "controls" });
+  controls.appendChild(customSelect(
+    [{ value: "__all__", label: "All teams" }, ...teamNames.map(n => ({ value: n, label: n }))],
+    state.feedbackTeam,
+    v => { state.feedbackTeam = v; render(); }));
+  main.appendChild(controls);
+
+  main.appendChild(el("div", { class: "section-header" }, "Trade Feedback",
+    el("span", { class: "section-sub" }, "AI breakdown of each trade — why each side did it and whether it helped")));
+
+  const filtered = state.feedbackTeam === "__all__" ? all : all.filter(t => t.names.includes(state.feedbackTeam));
+  if (!filtered.length) {
+    main.appendChild(el("div", { class: "card" }, el("div", { class: "empty" }, "No trades found.")));
+    return;
+  }
+  const card = el("div", { class: "card" });
+  filtered.forEach(item => card.appendChild(buildFeedbackBlock(item, players, seasons, typeForName)));
+  main.appendChild(card);
+}
+
+function renderAnalysisText(text) {
+  return el("div", { style: "white-space:pre-wrap; font-size:14px; line-height:1.55; margin-top:8px" }, text);
+}
+
+function buildTradeContext(item, players, evByRid, typeForName) {
+  const { season, trade } = item;
+  const describe = d => {
+    if (d.kind === "player") {
+      const p = players[d.pid];
+      return (p ? p.name : "Player " + d.pid) + (p && p.position ? " " + p.position : "") + " (KTC " + Math.round(d.value) + ")";
+    }
+    const dp = d.dp;
+    return dp.season + " round " + dp.round + " pick (KTC " + Math.round(d.value) + ")";
+  };
+  const lines = ["Completed dynasty trade on " + fmtDate(trade.created) + " (" + season.season + " season)."];
+  (trade.roster_ids || []).forEach(rid => {
+    const nm = canonicalOwnerName(userDisplay(rosterToOwner(season, rid)));
+    const t = typeForName[nm] ? " — " + typeForName[nm] : "";
+    const ev = evByRid[rid];
+    const got = ev ? ev.gotDetail.map(describe) : [];
+    const gave = ev ? ev.sentDetail.map(describe) : [];
+    lines.push("");
+    lines.push(nm + t + ":");
+    lines.push("  Received: " + (got.join(", ") || "nothing of tracked KTC value"));
+    lines.push("  Gave up: " + (gave.join(", ") || "nothing of tracked KTC value"));
+    if (ev) lines.push("  KTC: received ~" + ev.myReceived + ", gave ~" + ev.mySent +
+      " (net " + (ev.swing >= 0 ? "+" : "") + ev.swing + " in their favor).");
+  });
+  return lines.join("\n");
+}
+
+function buildFeedbackBlock(item, players, seasons, typeForName) {
+  const { season, trade, names } = item;
+  const block = el("div", { class: "trade-block" });
+
+  // Per-asset KTC values + per-side valuations, from evaluateTrade.
+  const valByPlayer = {}, valByPick = {}, evByRid = {};
+  (trade.roster_ids || []).forEach(rid => {
+    const ev = evaluateTrade(trade, rid, state.tradeHistory, players);
+    evByRid[rid] = ev;
+    if (ev) [...ev.gotDetail, ...ev.sentDetail].forEach(d => {
+      if (d.kind === "player") valByPlayer[d.pid] = d.value;
+      else valByPick[d.dp.season + "|" + d.dp.round + "|" + d.dp.roster_id] = d.value;
+    });
+  });
+  const withValue = (node, v) => {
+    node.appendChild(el("span", { class: "trade-where" }, v ? "KTC " + Math.round(v).toLocaleString() : "—"));
+    return node;
+  };
+
+  block.appendChild(el("div", { class: "trade-header" },
+    el("span", { class: "trade-date" }, names.join("  ↔  ")),
+    el("span", { class: "trade-meta" }, fmtDate(trade.created) + "  ·  " + season.season + " season")));
+
+  const cols = el("div", { class: "trade-cols" });
+  (trade.roster_ids || []).forEach(rid => {
+    const nm = canonicalOwnerName(userDisplay(rosterToOwner(season, rid)));
+    const t = typeForName[nm] ? " (" + typeForName[nm] + ")" : "";
+    const col = el("div", { class: "trade-col" }, el("div", { class: "trade-col-label" }, nm + t + " got"));
+    let any = false;
+    Object.entries(trade.adds || {}).forEach(([pid, r]) => {
+      if (r === rid) { col.appendChild(withValue(renderTradePlayerLine(pid, players), valByPlayer[pid])); any = true; }
+    });
+    (trade.draft_picks || []).forEach(dp => {
+      if (dp.owner_id === rid) {
+        col.appendChild(withValue(renderTradePickLine(dp, seasons, players, trade.created),
+          valByPick[dp.season + "|" + dp.round + "|" + dp.roster_id]));
+        any = true;
+      }
+    });
+    if (!any) col.appendChild(el("div", { class: "trade-empty" }, "—"));
+    cols.appendChild(col);
+  });
+  block.appendChild(cols);
+
+  // Lazy AI analysis, cached per trade so each is only generated (and billed) once.
+  const txid = trade.tx_id || (season.season + "-" + (trade.created || 0));
+  const wrap = el("div", { style: "margin-top:10px" });
+  const cached = state.tradeFeedbackCache && state.tradeFeedbackCache[txid];
+  if (cached) {
+    wrap.appendChild(renderAnalysisText(cached));
+  } else {
+    const btn = el("button", { class: "refresh", type: "button" }, "✨ Analyze this trade");
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      btn.textContent = "Analyzing…";
+      fetch("/api/trade-feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ context: buildTradeContext(item, players, evByRid, typeForName), tradeId: txid }),
+      })
+        .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.error || "HTTP " + r.status); return d; })
+        .then(d => {
+          state.tradeFeedbackCache = state.tradeFeedbackCache || {};
+          state.tradeFeedbackCache[txid] = d.analysis;
+          wrap.innerHTML = "";
+          wrap.appendChild(renderAnalysisText(d.analysis));
+        })
+        .catch(e => {
+          btn.disabled = false;
+          btn.textContent = "✨ Analyze this trade";
+          wrap.appendChild(el("div", { class: "pct", style: "color:var(--miss); margin-top:6px" }, e.message));
+        });
+    });
+    wrap.appendChild(btn);
+  }
+  block.appendChild(wrap);
+  return block;
+}
+
 function renderTradePlayerLine(pid, players) {
   const p = players[pid];
   const line = el("div", { class: "trade-line" });
@@ -6578,6 +6752,7 @@ const WORKSPACE_TABS = {
     { view: "trades", label: "Trades" },
     { view: "history", label: "History" },
     { view: "insights", label: "Insights" },
+    { view: "feedback", label: "Trade Feedback" },
   ],
   team: [
     { view: "liveDraft", label: "Live Draft" },
@@ -7317,6 +7492,7 @@ function render() {
     case "trades": renderTrades(); break;
     case "history": renderHistory(); break;
     case "insights": renderInsights(); break;
+    case "feedback": renderTradeFeedback(); break;
     case "overview": renderOverview(); break;
     // Team workspace
     case "teams": renderTeams(); break;

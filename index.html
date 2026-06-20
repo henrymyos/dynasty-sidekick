@@ -6318,7 +6318,7 @@ function renderPlayoffOdds(main) {
     el("td", {}, r.name),
     el("td", { class: "num" }, r.rec),
     el("td", { class: "num" }, r.proj),
-    el("td", { class: "num" }, Math.round(r.mean)),
+    el("td", { class: "num" }, String(Math.round(r.mean))),
     el("td", { class: "num " + (r.odds >= 0.5 ? "delta-pos" : r.odds <= 0.15 ? "delta-neg" : "") },
       Math.round(r.odds * 100) + "%"),
   )));

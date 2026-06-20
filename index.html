@@ -1553,6 +1553,9 @@ let state = {
   lineupData: null,            // weekly projections + league settings
   lineupDataLoading: false,
   lineupDataError: null,
+  seasonProj: null,            // per-week projected points (playoff odds)
+  seasonProjLoading: false,
+  seasonProjError: null,
   waiversFilter: "ALL",        // "ALL" | "QB" | "RB" | "WR" | "TE"
   allPlayersFilter: "ALL",     // position filter on the All Players tab
   leaderboardRound: null,
@@ -4999,6 +5002,28 @@ function ensureLineupDataLoaded() {
   if (!state.lineupData && !state.lineupDataLoading && !state.lineupDataError) loadLineupData();
 }
 
+async function loadSeasonProj() {
+  if (state.seasonProjLoading || state.seasonProj) return;
+  state.seasonProjLoading = true;
+  state.seasonProjError = null;
+  render();
+  try {
+    const res = await fetch("/api/season-projections?league_id=" + LEAGUE_ID, { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.seasonProj = data;
+  } catch (e) {
+    state.seasonProjError = e.message;
+  } finally {
+    state.seasonProjLoading = false;
+    render();
+  }
+}
+function ensureSeasonProjLoaded() {
+  if (!state.seasonProj && !state.seasonProjLoading && !state.seasonProjError) loadSeasonProj();
+}
+
 const LEAGUE_ID_SP = "1312076332460425216";
 function sleeperUrl(path) {
   return "https://sleeper.com/leagues/" + LEAGUE_ID_SP + (path || "");
@@ -6254,7 +6279,7 @@ function renderPlayoffOdds(main) {
     } else {
       Object.values(byMatch).forEach(p => {
         if (p.length !== 2) return;
-        remaining.push([p[0].roster_id, p[1].roster_id]);
+        remaining.push([p[0].roster_id, p[1].roster_id, w + 1]);
         if (byRid[p[0].roster_id]) byRid[p[0].roster_id].remGames++;
         if (byRid[p[1].roster_id]) byRid[p[1].roster_id].remGames++;
       });
@@ -6262,48 +6287,68 @@ function renderPlayoffOdds(main) {
   }
   if (!remaining.length) return;  // season fully played — nothing to project
 
-  // Per-team weekly scoring projection. The prior is each team's optimal-lineup
-  // projected points from Sleeper's player projections (real points, real best
-  // lineup). As real game scores come in, blend toward them (K = how many
-  // "games" of weight the projection prior carries). Falls back to a best-lineup
-  // KTC estimate if projections aren't loaded.
+  // Per-team projection for each specific week = its OPTIMAL-LINEUP projected
+  // points from Sleeper's player projections for that week. Bye weeks fall out
+  // naturally: a player with no projection that week contributes 0, so the
+  // lineup fills around him. Falls back to the current week's lineup, then a
+  // best-lineup KTC estimate, until per-week projections load.
+  ensureSeasonProjLoaded();
   ensureLineupDataLoaded();
-  const projMeanByRid = {};
+  const sp = state.seasonProj;
   const ld = state.lineupData;
-  if (ld && ld.projections) {
-    const scoring = (ld.league && ld.league.scoring_settings) || {};
-    const rps = (ld.league && ld.league.roster_positions && ld.league.roster_positions.length
-      ? ld.league.roster_positions : season.roster_positions) || [];
-    teams.forEach(t => {
-      const roster = season.rosters.find(r => r.roster_id === t.rid);
-      const cands = ((roster && roster.players) || []).map(pid => {
-        const p = state.sleeper.players[pid];
-        if (!p || !p.position) return null;
-        const proj = ld.projections[pid];
-        return { id: pid, position: p.position, projected: (proj && proj.stats) ? scoreProjection(proj.stats, scoring) : 0 };
-      }).filter(Boolean);
-      const lineup = fillOptimalLineup(rps, cands);
-      projMeanByRid[t.rid] = lineup.reduce((s, l) => s + (l.player ? l.player.projected : 0), 0);
-    });
-  }
-  // KTC fallback prior.
-  const optByRid = {};
-  const ranked = state.ktcDynasty ? computeManagerRankings() : null;
-  if (ranked) ranked.forEach(r => { optByRid[r.roster_id] = r.optimalValue || 0; });
-  const optVals = Object.values(optByRid).filter(v => v > 0);
-  const avgOpt = optVals.length ? optVals.reduce((a, b) => a + b, 0) / optVals.length : 0;
-  const BASE = 110, K = 5;
+  const rps = (season.roster_positions && season.roster_positions.length
+    ? season.roster_positions
+    : (ld && ld.league && ld.league.roster_positions)) || [];
+  const rosterByRid = {};
+  season.rosters.forEach(r => { rosterByRid[r.roster_id] = r; });
+  const lineupPts = (rid, ptsByPid) => {
+    const cands = ((rosterByRid[rid] && rosterByRid[rid].players) || []).map(pid => {
+      const p = state.sleeper.players[pid];
+      if (!p || !p.position) return null;
+      return { id: pid, position: p.position, projected: ptsByPid[pid] || 0 };
+    }).filter(Boolean);
+    return fillOptimalLineup(rps, cands).reduce((s, l) => s + (l.player ? l.player.projected : 0), 0);
+  };
+
+  // Per-week projection per team, plus a per-team average (used for any week
+  // that's missing projection data).
+  const projWeek = {}, avgProj = {};
   teams.forEach(t => {
-    const proj = projMeanByRid[t.rid];
-    if (proj && proj > 0) t.prior = proj;
-    else { const opt = optByRid[t.rid] || 0; t.prior = (avgOpt && opt) ? BASE * (0.65 + 0.35 * opt / avgOpt) : BASE; }
-    const n = t.scores.length;
-    const obsMean = n ? t.scores.reduce((a, b) => a + b, 0) / n : 0;
-    t.mean = (K * t.prior + n * obsMean) / (K + n);
-    if (n >= 3) {
-      t.sd = Math.max(15, Math.sqrt(t.scores.reduce((s, x) => s + (x - obsMean) ** 2, 0) / n) || 24);
-    } else t.sd = Math.max(18, 0.22 * t.mean);
+    projWeek[t.rid] = {};
+    let sum = 0, cnt = 0;
+    if (sp && sp.pointsByWeek) {
+      (sp.weeks || []).forEach(wk => {
+        const v = lineupPts(t.rid, sp.pointsByWeek[wk] || {});
+        projWeek[t.rid][wk] = v;
+        if (v > 0) { sum += v; cnt++; }
+      });
+    }
+    avgProj[t.rid] = cnt ? sum / cnt : 0;
   });
+
+  // Constant fallback prior (current-week lineup projection, else KTC strength).
+  const constPrior = {};
+  if (ld && ld.projections) {
+    const sc = (ld.league && ld.league.scoring_settings) || {};
+    const ptsMap = {};
+    for (const pid in ld.projections) { const pr = ld.projections[pid]; ptsMap[pid] = pr.stats ? scoreProjection(pr.stats, sc) : 0; }
+    teams.forEach(t => { constPrior[t.rid] = lineupPts(t.rid, ptsMap); });
+  } else {
+    const rk = state.ktcDynasty ? computeManagerRankings() : null;
+    const optByRid = {};
+    if (rk) rk.forEach(r => { optByRid[r.roster_id] = r.optimalValue || 0; });
+    const ov = Object.values(optByRid).filter(v => v > 0);
+    const ao = ov.length ? ov.reduce((a, b) => a + b, 0) / ov.length : 0;
+    teams.forEach(t => { const o = optByRid[t.rid] || 0; constPrior[t.rid] = (ao && o) ? 110 * (0.65 + 0.35 * o / ao) : 110; });
+  }
+  const meanFor = (rid, wk) => {
+    if (sp && sp.pointsByWeek) {
+      const v = projWeek[rid][wk];
+      return (v && v > 0) ? v : (avgProj[rid] || constPrior[rid] || 110);
+    }
+    return constPrior[rid] || 110;
+  };
+  const sdFor = mean => Math.max(18, 0.22 * mean);
 
   const pt = season.playoff_teams || Math.floor(teams.length / 2);
   const N = 4000;
@@ -6312,9 +6357,9 @@ function renderPlayoffOdds(main) {
   for (let s = 0; s < N; s++) {
     const w = {}, p = {};
     teams.forEach(t => { w[t.rid] = t.wins0; p[t.rid] = t.pts0; });
-    remaining.forEach(([ra, rb]) => {
-      const A = byRid[ra], B = byRid[rb];
-      const sa = sampleNormal(A.mean, A.sd), sb = sampleNormal(B.mean, B.sd);
+    remaining.forEach(([ra, rb, wk]) => {
+      const ma = meanFor(ra, wk), mb = meanFor(rb, wk);
+      const sa = sampleNormal(ma, sdFor(ma)), sb = sampleNormal(mb, sdFor(mb));
       p[ra] += sa; p[rb] += sb;
       if (sa > sb) w[ra] += 1; else if (sb > sa) w[rb] += 1; else { w[ra] += 0.5; w[rb] += 0.5; }
     });
@@ -6322,10 +6367,17 @@ function renderPlayoffOdds(main) {
     const order = teams.slice().sort((a, b) => (w[b.rid] - w[a.rid]) || (p[b.rid] - p[a.rid]));
     for (let i = 0; i < pt && i < order.length; i++) made[order[i].rid]++;
   }
+  const remWeeksByRid = {};
+  remaining.forEach(([ra, rb, wk]) => {
+    (remWeeksByRid[ra] = remWeeksByRid[ra] || []).push(wk);
+    (remWeeksByRid[rb] = remWeeksByRid[rb] || []).push(wk);
+  });
   const rows = teams.map(t => {
+    const myWeeks = remWeeksByRid[t.rid] || [];
+    const meanAvg = myWeeks.length ? myWeeks.reduce((s, wk) => s + meanFor(t.rid, wk), 0) / myWeeks.length : (constPrior[t.rid] || 0);
     const totalG = Math.round(t.wins0 + t.losses0 + t.remGames);
-    const w = Math.round(projWins[t.rid] / N);   // losses = games − wins, so each record sums to its game count
-    return { name: t.name, rec: t.rec, proj: w + "-" + (totalG - w), mean: t.mean, odds: made[t.rid] / N };
+    const wc = Math.round(projWins[t.rid] / N);   // losses = games − wins, so each record sums to its game count
+    return { name: t.name, rec: t.rec, proj: wc + "-" + (totalG - wc), mean: meanAvg, odds: made[t.rid] / N };
   }).sort((a, b) => b.odds - a.odds || b.mean - a.mean);
 
   const table = el("table", {},
@@ -6350,8 +6402,8 @@ function renderPlayoffOdds(main) {
     el("div", { style: "overflow-x:auto" }, table),
     el("div", { class: "hist-note" },
       "Monte-Carlo over the remaining " + remaining.length + " games on the actual schedule. " +
-      (ld && ld.projections
-        ? "Each team's weekly points = its optimal-lineup projection from Sleeper's player projections, shifting to its real scoring as games are played. "
+      (sp
+        ? "Each team's points each week = its optimal-lineup projection from Sleeper's player projections for that specific week, so bye weeks lower a team's output. "
         : "Weekly points are estimated from roster strength until projections load. ") +
       "Proj pts/wk is the projected weekly average; top " + pt + " seeds make the playoffs.")));
 }

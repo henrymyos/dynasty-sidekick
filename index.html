@@ -4029,49 +4029,6 @@ function renderStats() {
   const main = document.getElementById("main");
   main.innerHTML = "";
 
-  // ----- Year × Round matrix -----
-  main.appendChild(el("div", { class: "section-header" }, "League Overview",
-    el("span", { class: "section-sub" }, "How the league as a whole has drafted")));
-  const matrixCard = el("div", { class: "card" }, el("h2", {}, "Round by Year"));
-  const matrixTable = el("table", {},
-    el("thead", {}, el("tr", {},
-      el("th", {}, "Year"),
-      el("th", { class: "num" }, "R1 Hit %"),
-      el("th", { class: "num" }, "R1 Hit + Meh"),
-      el("th", { class: "num gap-left" }, "R2 Hit %"),
-      el("th", { class: "num" }, "R2 Hit + Meh"),
-      el("th", { class: "num gap-left" }, "R3 Hit %"),
-      el("th", { class: "num" }, "R3 Hit + Meh"),
-    )),
-  );
-  const mtbody = el("tbody", {});
-  // Clickable percentage cell: opens the picks behind that year+round.
-  function matrixCell(extraClass, pct, picks, title) {
-    return el("td", {
-      class: "num cell-clickable" + (extraClass ? " " + extraClass : ""),
-      onclick: () => showPicksModal(title, picks),
-    }, pct);
-  }
-  state.years.forEach(y => {
-    const yp = state.picks.filter(p => p.year === y);
-    const r1p = yp.filter(p => p.round === 1), r2p = yp.filter(p => p.round === 2), r3p = yp.filter(p => p.round === 3);
-    const r1 = tally(r1p), r2 = tally(r2p), r3 = tally(r3p);
-    mtbody.appendChild(el("tr", {},
-      el("td", { class: "cell-clickable", onclick: () => showPicksModal(y + " — all rounds", yp) }, String(y)),
-      matrixCell("", formatPct(r1.hit, r1.graded), r1p, y + " Round 1"),
-      matrixCell("", formatPct(r1.hit + r1.meh, r1.graded), r1p, y + " Round 1"),
-      matrixCell("gap-left", formatPct(r2.hit, r2.graded), r2p, y + " Round 2"),
-      matrixCell("", formatPct(r2.hit + r2.meh, r2.graded), r2p, y + " Round 2"),
-      matrixCell("gap-left", formatPct(r3.hit, r3.graded), r3p, y + " Round 3"),
-      matrixCell("", formatPct(r3.hit + r3.meh, r3.graded), r3p, y + " Round 3"),
-    ));
-  });
-  matrixTable.appendChild(mtbody);
-  matrixCard.appendChild(matrixTable);
-  matrixCard.appendChild(el("div", { class: "pct", style: "margin-top:8px" },
-    "Tip: click any hit-rate cell or row in the cards below to see every pick in that group, ordered by draft year."));
-  main.appendChild(matrixCard);
-
   // ----- Round tier breakdown (Early/Mid/Late within each round) -----
   main.appendChild(el("div", { class: "section-header" }, "Slot & Position",
     el("span", { class: "section-sub" }, "Where in the draft each position has paid off")));

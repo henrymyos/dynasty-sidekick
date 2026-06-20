@@ -2949,7 +2949,6 @@ function renderRosters() {
     tierAssets.forEach(a => {
       const valueBits = [];
       if (a.ktc) valueBits.push("KTC " + a.ktc.toLocaleString());
-      if (a.flock) valueBits.push("Flock " + a.flock.toLocaleString());
       const nameLine = el("div", { class: "name-line" },
         el("span", { class: "player-name" }, a.name),
       );
@@ -3373,7 +3372,6 @@ function renderRosters() {
         items.forEach(a => {
           const valueBits = [];
           if (a.ktc) valueBits.push("KTC " + a.ktc.toLocaleString());
-          if (a.flock) valueBits.push("Flock " + a.flock.toLocaleString());
           col.appendChild(el("div", { class: "trade-line" },
             el("span", { class: "trade-player" }, a.name),
             el("span", { class: "pos-chip " + positionClass(a.position) }, a.position),
@@ -3382,8 +3380,7 @@ function renderRosters() {
         });
         const sum = sumValues(items);
         col.appendChild(el("div", { class: "pct", style: "margin-top:6px" },
-          `Total: KTC ${Math.round(sum.ktc).toLocaleString()}` +
-          (sum.flock ? `  ·  Flock ${Math.round(sum.flock).toLocaleString()}` : "")));
+          `Total: KTC ${Math.round(sum.ktc).toLocaleString()}`));
         return col;
       }
       cols.appendChild(side("You send", t.gives));
@@ -3417,7 +3414,7 @@ function renderRosters() {
         const recvList = t.gets.map(a => `  - ${a.name} (${a.position})`).join("\n");
         return `Proposed trade with ${t.partnerName} (${partnerType})\n` +
           `${selectedName} sends:\n${sendList}\n${selectedName} receives:\n${recvList}\n` +
-          `${Math.round(t.fairness * 100)}% fair (KTC + Flock)`;
+          `${Math.round(t.fairness * 100)}% fair (blended market value)`;
       }
       const tradeActions = el("div", { class: "action-row" });
       tradeActions.appendChild(actionButton("Copy trade", (e, btn) => copyToClipboard(tradeText(), btn)));
@@ -3430,7 +3427,7 @@ function renderRosters() {
   tradeCard.appendChild(el("div", { class: "pct", style: "margin-top:10px" },
     "Algorithm: exhaustive search across all 1-for-1 through 3-for-3 swaps between you and every other manager. " +
     "Movable pool includes every player and pick on either roster regardless of tier (tiny value floor only), with each side trimmed to its top 12 assets by value. " +
-    "Blended value = 0.7 × Flock expert-avg + 0.3 × KTC (Flock-only or KTC-only if one source is missing). " +
+    "Blended value = 0.7 × expert-consensus average + 0.3 × KTC (either source alone if the other is missing). " +
     "Asset tiers use a position-aware age curve (QB cliff 33, WR 28, TE 30, RB 26 — picks classified by value alone). " +
     "A swap qualifies only when (a) every calculator with data on both sides agrees the value gap is < 12%, " +
     "(b) the giver is not parting with a position they're already weak at, " +
@@ -7240,11 +7237,6 @@ function renderDraftWorkspace() {
   const recCard = el("div", { class: "card" },
     el("h2", {}, "Recommendation ", statusBadge)
   );
-
-  if (state.draft.flockError) {
-    recCard.appendChild(el("div", { class: "pct", style: "color: var(--meh); margin-bottom:8px" },
-      "Flock unavailable (" + state.draft.flockError + ") — using KTC only."));
-  }
 
   // Mode toggle (Best Available vs Position-Need)
   const toggle = el("div", { class: "toggle-row" });

@@ -7136,7 +7136,11 @@ function renderDraftWorkspace() {
   const flockByName = {};
   flock.forEach(p => { flockByName[p.normName] = p; });
 
-  const pickedIds = new Set(d.picks.map(p => p.player_id).filter(Boolean));
+  // Off the board = taken in this draft, or already rostered from an earlier
+  // one (this league runs a June rookie draft and an August supplemental, so
+  // the current draft's picks alone don't tell you who's left).
+  const takenIds = new Set(d.picks.map(p => p.player_id).filter(Boolean));
+  (d.rosters || []).forEach(r => (r.players || []).forEach(pid => takenIds.add(pid)));
   const rookieByName = {};
   d.rookies.forEach(r => { rookieByName[ktcNorm(r.name)] = r; });
 
@@ -7148,7 +7152,7 @@ function renderDraftWorkspace() {
   allNorms.forEach(norm => {
     const sleeperRookie = rookieByName[norm];
     if (!sleeperRookie) return;
-    if (pickedIds.has(sleeperRookie.player_id)) return;
+    if (takenIds.has(sleeperRookie.player_id)) return;
     const ktcEntry = ktcByName[norm];
     const flockEntry = flockByName[norm];
     if (!ktcEntry && !flockEntry) return;

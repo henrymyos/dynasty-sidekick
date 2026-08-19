@@ -31,12 +31,21 @@ export default async function handler(req, res) {
   try {
     const leagueId = resolveLeagueId(req);
     const drafts = await get(`/league/${leagueId}/drafts`);
-    // Prefer a 3-round rookie draft (this league's convention); fall back to
-    // the most recent draft of any shape so other leagues still get a board.
-    const rookieDraft = drafts
-      .filter(d => d.settings && d.settings.rounds === 3)
-      .sort((a, b) => (a.created || 0) - (b.created || 0))[0]
-      || drafts.slice().sort((a, b) => (b.created || 0) - (a.created || 0))[0];
+    // A league can hold more than one draft in a season (e.g. a rookie draft
+    // plus a later supplemental one), so pick by what's actually happening
+    // now: in-progress first, then upcoming, then the most recent finished
+    // one. Prefer the 3-round rookie shape (this league's convention) but fall
+    // back to drafts of any shape so other leagues still get a board.
+    const statusRank = d =>
+      d.status === "drafting" || d.status === "paused" ? 0
+      : d.status === "pre_draft" ? 1
+      : 2;
+    const mostRelevant = list => list.slice().sort((a, b) =>
+      statusRank(a) - statusRank(b) || (b.created || 0) - (a.created || 0)
+    )[0];
+    const rookieDraft =
+      mostRelevant(drafts.filter(d => d.settings && d.settings.rounds === 3))
+      || mostRelevant(drafts);
     if (!rookieDraft) {
       res.status(500).json({ error: "no rookie draft found" });
       return;

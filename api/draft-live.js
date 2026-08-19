@@ -75,6 +75,9 @@ export default async function handler(req, res) {
       };
     });
 
+    const ownedIds = new Set();
+    rosters.forEach(r => (r.players || []).forEach(pid => ownedIds.add(pid)));
+
     // Also expose rookies of the upcoming class so we can match them against KTC
     const allRookies = [];
     for (const id in playersDb) {
@@ -87,6 +90,25 @@ export default async function handler(req, res) {
         name: `${p.first_name || ""} ${p.last_name || ""}`.trim(),
         position: p.position,
         team: p.team || null,
+      });
+    }
+
+    // Non-rookies are draftable too (the supplemental draft runs off the same
+    // board), so ship the unrostered veterans the client can value against KTC.
+    // Limited to players active on an NFL roster — the rest is noise.
+    const freeAgents = [];
+    for (const id in playersDb) {
+      const p = playersDb[id];
+      if (!p || p.years_exp === 0) continue;
+      if (!["QB", "RB", "WR", "TE"].includes(p.position)) continue;
+      if (!p.team || p.status !== "Active") continue;
+      if (ownedIds.has(id)) continue;
+      freeAgents.push({
+        player_id: id,
+        name: `${p.first_name || ""} ${p.last_name || ""}`.trim(),
+        position: p.position,
+        team: p.team,
+        years_exp: p.years_exp,
       });
     }
 
@@ -133,6 +155,7 @@ export default async function handler(req, res) {
         })),
       players: playersOut,
       rookies: allRookies,
+      free_agents: freeAgents,
       updated: Date.now(),
     });
   } catch (e) {

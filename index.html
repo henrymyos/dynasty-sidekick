@@ -7129,6 +7129,7 @@ function renderDraftWorkspace() {
   // one source we use that source's rank as-is.
   const FLOCK_WEIGHT = 0.7;
   const KTC_WEIGHT = 0.3;
+  const dyn = (state.draft.ktcDynasty && state.draft.ktcDynasty.players) || {};
   const ktc = (state.draft.ktcLive && state.draft.ktcLive.players) || [];
   const flock = (state.draft.flockLive && state.draft.flockLive.players) || [];
   const ktcByName = {};
@@ -7181,11 +7182,70 @@ function renderDraftWorkspace() {
     });
   });
 
+  // Non-rookies are eligible in this draft, so fold in the best unrostered
+  // veterans. KTC dynasty value is the common currency: each vet is slotted
+  // where their value falls among the rookies still on the board, which gives
+  // them a comparable combinedRank and lets the recommendation, the Top
+  // Available list and the projection all work off one pool.
+  const ladder = availablePool
+    .map(p => ({ value: (dyn[p.normName] || {}).value || 0, rank: p.combinedRank }))
+    .filter(x => x.value > 0)
+    .sort((a, b) => b.value - a.value);
+
+  function rankForValue(v) {
+    const top = ladder[0], bottom = ladder[ladder.length - 1];
+    // Outside the rookie range, scale the edge rank by the value ratio so the
+    // ordering stays monotonic instead of piling up on a single rank.
+    if (v >= top.value) return Math.max(0.5, top.rank * (top.value / v));
+    if (v <= bottom.value) return bottom.rank * (bottom.value / v);
+    for (let i = 0; i < ladder.length - 1; i++) {
+      const a = ladder[i], b = ladder[i + 1];
+      if (v <= a.value && v >= b.value) {
+        const t = (a.value - v) / Math.max(1, a.value - b.value);
+        return a.rank + t * (b.rank - a.rank);
+      }
+    }
+    return bottom.rank;
+  }
+
+  if (ladder.length) {
+    // "High ranked enough" = worth at least the weakest rookie still on the
+    // board, and no more of them than there are picks left to spend.
+    const floorValue = ladder[ladder.length - 1].value;
+    const vetLimit = Math.max(totalPicks - nextOverall + 1, 10);
+    (d.free_agents || [])
+      .map(fa => {
+        const norm = ktcNorm(fa.name);
+        const entry = dyn[norm];
+        return entry && entry.value >= floorValue && !takenIds.has(fa.player_id)
+          ? { fa, norm, entry }
+          : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.entry.value - a.entry.value)
+      .slice(0, vetLimit)
+      .forEach(({ fa, norm, entry }) => {
+        const combinedRank = rankForValue(entry.value);
+        availablePool.push({
+          name: fa.name,
+          normName: norm,
+          position: fa.position,
+          team: fa.team || entry.team,
+          player_id: fa.player_id,
+          value: 10000 / Math.max(combinedRank, 0.5),
+          combinedRank,
+          ktcRank: null,
+          flockRank: null,
+          veteran: true,
+          age: entry.age,
+        });
+      });
+  }
+
   // Position-need calculation. Value each roster's players using KTC superflex
   // dynasty values per position, weighting starters over depth (see
   // decayedPositionalValue), then rank each roster in the league.
   const POS_LIST = ["QB", "RB", "WR", "TE"];
-  const dyn = (state.draft.ktcDynasty && state.draft.ktcDynasty.players) || {};
   // Sorted (desc) KTC values per position per roster — the raw material for
   // both the decayed strength score and the draft projection.
   const teamPosValues = {};
@@ -7275,7 +7335,7 @@ function renderDraftWorkspace() {
   }
 
   if (!recommendations.length) {
-    recCard.appendChild(el("div", { class: "empty" }, "No KTC-ranked rookies left or KTC live data not loaded."));
+    recCard.appendChild(el("div", { class: "empty" }, "No KTC-ranked players left or KTC live data not loaded."));
   } else {
     recommendations.slice(0, 3).forEach((p, i) => {
       const card = el("div", { class: "rec-card" });
@@ -7287,6 +7347,7 @@ function renderDraftWorkspace() {
       card.appendChild(playerLine);
       const metaBits = [`Rank ${p.combinedRank.toFixed(1)}`];
       if (p.team) metaBits.push(p.team);
+      if (p.veteran) metaBits.push("vet" + (p.age ? ` · ${p.age}y` : ""));
       if (state.draft.posMode && posBoost[p.position] !== 1) {
         metaBits.push(`need boost ×${posBoost[p.position].toFixed(2)}`);
       }
@@ -7297,7 +7358,7 @@ function renderDraftWorkspace() {
   leftCol.appendChild(recCard);
 
   // Top available pool
-  const availCard = el("div", { class: "card" }, el("h2", {}, "Top Available Rookies"));
+  const availCard = el("div", { class: "card" }, el("h2", {}, "Top Available"));
   if (!recommendations.length) {
     availCard.appendChild(el("div", { class: "empty" }, "—"));
   } else {
@@ -7309,7 +7370,8 @@ function renderDraftWorkspace() {
           p.position ? el("span", { class: "pos-chip " + positionClass(p.position), style: "margin-left:8px" }, p.position) : null,
         ),
         el("div", { class: "pick-history-by" },
-          `Rank ${p.combinedRank.toFixed(1)}` + (p.team ? "  ·  " + p.team : ""),
+          `Rank ${p.combinedRank.toFixed(1)}` + (p.team ? "  ·  " + p.team : "") +
+          (p.veteran ? "  ·  vet" + (p.age ? ` ${p.age}y` : "") : ""),
         ),
       );
       availCard.appendChild(row);
@@ -7514,7 +7576,7 @@ function renderDraftWorkspace() {
   }
 
   if (!projection.length) {
-    projCard.appendChild(el("div", { class: "empty" }, "Draft is complete or no KTC-ranked rookies remain."));
+    projCard.appendChild(el("div", { class: "empty" }, "Draft is complete or no KTC-ranked players remain."));
   } else {
     const seenRounds = new Set();
     projection.forEach(p => {

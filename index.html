@@ -7355,7 +7355,8 @@ function renderDraftWorkspace() {
       recCard.appendChild(card);
     });
   }
-  leftCol.appendChild(recCard);
+  // Once the draft is over there is nothing to recommend; drop the stale panel.
+  if (d.draft.status !== "complete") leftCol.appendChild(recCard);
 
   // Top available pool
   const availCard = el("div", { class: "card" }, el("h2", {}, "Top Available"));
@@ -7396,7 +7397,7 @@ function renderDraftWorkspace() {
       ));
     });
   }
-  rightCol.appendChild(myPicksCard);
+  if (d.draft.status !== "complete") rightCol.appendChild(myPicksCard);
 
   // Recent activity (all picks so far, newest first, in a scrollable list)
   const recentCard = el("div", { class: "card" }, el("h2", {}, "Recent Picks"));

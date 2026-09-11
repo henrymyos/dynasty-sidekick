@@ -38,6 +38,11 @@ function normalizeName(s) {
 }
 
 function extractPlayersArrayJson(html) {
+  // Current KTC pages ship the full array in a JSON script tag:
+  //   <script id="ktc-players" type="application/json">[...]</script>
+  // Older captures (and the Wayback ones) inline `var playersArray = [...]`.
+  const tag = html.match(/<script[^>]*id="ktc-players"[^>]*>([\s\S]*?)<\/script>/);
+  if (tag && tag[1].trim().startsWith("[")) return tag[1].trim();
   let start = html.indexOf("playersArray");
   if (start < 0) return null;
   start = html.indexOf("[", start);

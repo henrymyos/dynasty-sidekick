@@ -622,6 +622,28 @@
     .player-tile { padding: 4px 5px; }
     .pt-last { font-size: 11px; }
   }
+  /* ---- Trade Analyzer ---- */
+  .ta-controls { align-items: center; flex-wrap: wrap; }
+  .ta-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .ta-summary .stat-grid { margin-top: 8px; }
+  .ta-note { color: var(--muted); font-size: 12px; margin: 10px 0 0; line-height: 1.45; }
+  .ta-h3 { margin: 14px 0 6px; font-size: 14px; }
+  .ta-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .ta-table th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 4px 6px; }
+  .ta-table td { padding: 5px 6px; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  .draft-pill.ta-fair { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .ta-row { display: grid; grid-template-columns: 22px minmax(0,1fr) auto; gap: 8px; align-items: center; width: 100%;
+    padding: 7px 8px; margin: 2px 0; border-radius: 6px; border: 1px solid transparent; background: transparent;
+    color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+  .ta-row:hover { background: var(--panel-2); }
+  .ta-row.on { background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.35); }
+  .ta-check { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; color: var(--accent); }
+  .ta-row.on .ta-check { border-color: var(--accent); background: rgba(88,166,255,0.2); }
+  .ta-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ta-meta { color: var(--muted); font-size: 12px; }
+  .ta-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .ta-val small { display: block; color: var(--muted); font-weight: 400; font-size: 11px; }
+  .ta-clear { margin-top: 12px; }
   .draft-pill {
     display: inline-block;
     padding: 2px 6px;
@@ -2662,25 +2684,171 @@ function buildTierLegendCard() {
   return legendCard;
 }
 
-function renderRosters() {
+// ===== Trade Analyzer (Team workspace) =====
+// Values are the same blend the Rosters tab uses (70% Flock / 30% KTC for
+// players, KTC for picks). Each side's total is "consolidation-adjusted":
+// assets are sorted by value and the i-th one counts 0.9^i, so two middling
+// pieces don't automatically outweigh one star — the way dynasty managers
+// actually price a package.
+const TA_DECAY = 0.9;
+function taAdjusted(assets) {
+  return assets.slice().sort((a, b) => b.value - a.value)
+    .reduce((s, a, i) => s + a.value * Math.pow(TA_DECAY, i), 0);
+}
+function taFmt(n) { return Math.round(n).toLocaleString(); }
+
+function renderTradeAnalyzer() {
   const main = document.getElementById("main");
   main.innerHTML = "";
   ensureSleeperLoaded();
   ensureKtcDynastyLoaded();
   ensureFlockLoaded();
-  ensureLineupDataLoaded();  // powers the projection override for old players
-
+  main.appendChild(el("div", { class: "section-header" }, "Trade Analyzer",
+    el("span", { class: "section-sub" }, "Pick what you'd send and what you'd get back — value, fairness, and what it does to both lineups")));
   if (!state.sleeper) {
-    main.appendChild(el("div", { class: "empty" },
-      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
+    main.appendChild(el("div", { class: "empty" }, state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading league…"));
     return;
   }
-  if (!state.ktcDynasty) {
-    main.appendChild(el("div", { class: "empty" },
-      state.ktcDynastyError ? "KTC error: " + state.ktcDynastyError : "Loading current KTC values…"));
+  const M = leagueAssetModel();
+  if (!M) {
+    main.appendChild(el("div", { class: "empty" }, state.ktcDynastyError ? "KTC error: " + state.ktcDynastyError : "Loading current KTC values…"));
     return;
   }
+  const { latestSeason, POS } = M;
+  if (!state.trade) state.trade = { myTeam: null, partner: null, give: new Set(), get: new Set() };
+  const t = state.trade;
+  const users = sortUsersHenryFirst(latestSeason.users);
+  if (!users.length) { main.appendChild(el("div", { class: "empty" }, "No teams found.")); return; }
+  if (!t.myTeam || !users.some(u => u.user_id === t.myTeam)) {
+    t.myTeam = (state.rosterTeam && users.some(u => u.user_id === state.rosterTeam)) ? state.rosterTeam : users[0].user_id;
+  }
+  if (!t.partner || t.partner === t.myTeam || !users.some(u => u.user_id === t.partner)) {
+    const other = users.find(u => u.user_id !== t.myTeam);
+    t.partner = other ? other.user_id : null;
+  }
+  const opts = users.map(u => ({ value: u.user_id, label: canonicalOwnerName(userDisplay(u)) }));
+  const controls = el("div", { class: "controls ta-controls" });
+  controls.appendChild(el("span", { class: "ta-label" }, "Your team"));
+  controls.appendChild(customSelect(opts, t.myTeam, v => {
+    if (v === t.partner) t.partner = t.myTeam;
+    t.myTeam = v; t.give.clear(); t.get.clear(); render();
+  }));
+  controls.appendChild(el("span", { class: "ta-label" }, "Trading with"));
+  controls.appendChild(customSelect(opts.filter(o => o.value !== t.myTeam), t.partner, v => {
+    t.partner = v; t.get.clear(); render();
+  }));
+  main.appendChild(controls);
 
+  const myRoster = latestSeason.rosters.find(r => r.owner_id === t.myTeam);
+  const theirRoster = latestSeason.rosters.find(r => r.owner_id === t.partner);
+  if (!myRoster || !theirRoster) { main.appendChild(el("div", { class: "empty" }, "Pick two teams.")); return; }
+  const myName = (opts.find(o => o.value === t.myTeam) || {}).label || "You";
+  const theirName = (opts.find(o => o.value === t.partner) || {}).label || "Partner";
+  const sortAssets = list => list.slice().sort((a, b) => (a.kind === b.kind ? b.value - a.value : a.kind === "player" ? -1 : 1));
+  const myAssets = sortAssets(M.assetsForRoster(myRoster.roster_id));
+  const theirAssets = sortAssets(M.assetsForRoster(theirRoster.roster_id));
+  // Drop selections that no longer exist (roster changed since last render).
+  [...t.give].forEach(id => { if (!myAssets.some(a => a.id === id)) t.give.delete(id); });
+  [...t.get].forEach(id => { if (!theirAssets.some(a => a.id === id)) t.get.delete(id); });
+  const give = myAssets.filter(a => t.give.has(a.id));
+  const get = theirAssets.filter(a => t.get.has(a.id));
+
+  // ---------- Verdict ----------
+  const giveRaw = give.reduce((s, a) => s + a.value, 0);
+  const getRaw = get.reduce((s, a) => s + a.value, 0);
+  const giveAdj = taAdjusted(give), getAdj = taAdjusted(get);
+  const diff = getAdj - giveAdj;
+  const pct = diff / Math.max(giveAdj, getAdj, 1);
+  const both = give.length && get.length;
+  let verdict, verdictClass = "pre";
+  if (!give.length && !get.length) verdict = "Select assets on both sides";
+  else if (!both) verdict = "Add something to the other side";
+  else if (Math.abs(pct) < 0.05) { verdict = "Fair trade"; verdictClass = "ta-fair"; }
+  else if (Math.abs(pct) < 0.15) { verdict = diff > 0 ? "Slightly favors you" : "Slightly favors " + theirName; verdictClass = diff > 0 ? "done" : "live"; }
+  else { verdict = diff > 0 ? "Favors you" : "Favors " + theirName; verdictClass = diff > 0 ? "done" : "live"; }
+
+  const summary = el("div", { class: "card ta-summary" });
+  summary.appendChild(el("h2", {}, "Verdict ", el("span", { class: "draft-pill " + verdictClass }, verdict)));
+  summary.appendChild(el("div", { class: "stat-grid" },
+    el("div", { class: "stat" }, el("div", { class: "stat-label" }, "You give"), el("div", { class: "stat-value" }, taFmt(giveAdj)),
+      el("div", { class: "pct" }, give.length + (give.length === 1 ? " asset" : " assets") + " · raw " + taFmt(giveRaw))),
+    el("div", { class: "stat" }, el("div", { class: "stat-label" }, "You get"), el("div", { class: "stat-value" }, taFmt(getAdj)),
+      el("div", { class: "pct" }, get.length + (get.length === 1 ? " asset" : " assets") + " · raw " + taFmt(getRaw))),
+    el("div", { class: "stat" }, el("div", { class: "stat-label" }, "Net for you"),
+      el("div", { class: "stat-value " + (diff > 0 ? "delta-pos" : diff < 0 ? "delta-neg" : "") }, (diff > 0 ? "+" : "") + taFmt(diff)),
+      el("div", { class: "pct" }, both ? (pct > 0 ? "+" : "") + Math.round(pct * 100) + "%" : "—")),
+  ));
+
+  // ---------- Lineup impact ----------
+  if (give.length || get.length) {
+    const givePids = new Set(give.filter(a => a.kind === "player").map(a => a.id));
+    const getPids = new Set(get.filter(a => a.kind === "player").map(a => a.id));
+    const myAfter = (myRoster.players || []).filter(p => !givePids.has(p)).concat([...getPids]);
+    const theirAfter = (theirRoster.players || []).filter(p => !getPids.has(p)).concat([...givePids]);
+    const before = M.starterRanksWith(null);
+    const after = M.starterRanksWith({ [myRoster.roster_id]: myAfter, [theirRoster.roster_id]: theirAfter });
+    const nTeams = latestSeason.rosters.length;
+    const cell = (b, a) => el("span", { class: a < b ? "delta-pos" : a > b ? "delta-neg" : "" }, "#" + b + (a === b ? "" : " → #" + a));
+    const rows = POS.map(pos => el("tr", {},
+      el("td", {}, el("span", { class: "pos-chip " + positionClass(pos) }, pos)),
+      el("td", {}, cell(before[pos][myRoster.roster_id], after[pos][myRoster.roster_id])),
+      el("td", {}, cell(before[pos][theirRoster.roster_id], after[pos][theirRoster.roster_id])),
+    ));
+    summary.appendChild(el("h3", { class: "ta-h3" }, "Lineup impact ",
+      el("span", { class: "section-sub" }, "league rank of each position's starters, out of " + nTeams)));
+    summary.appendChild(el("table", { class: "ta-table" },
+      el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, myName), el("th", {}, theirName))),
+      el("tbody", {}, ...rows)));
+    const needs = ranks => POS.filter(pos => ranks[pos][myRoster.roster_id] > 4);
+    const nb = needs(before), na = needs(after);
+    summary.appendChild(el("p", { class: "ta-note" },
+      "Your needs (starters outside the league's top 4): " + (nb.length ? nb.join(", ") : "none") +
+      " → after the trade: " + (na.length ? na.join(", ") : "none") + "."));
+  }
+  summary.appendChild(el("p", { class: "ta-note" },
+    "Values blend Flock and KTC exactly like the Rosters tab. Side totals are consolidation-adjusted — each side's assets are sorted by value and the 2nd, 3rd… pieces count 90%, 81%… — so a pile of depth doesn't beat one star."));
+  main.appendChild(summary);
+
+  // ---------- Asset pickers ----------
+  const pickers = el("div", { class: "draft-grid" });
+  pickers.appendChild(taAssetCard(myName + " sends", myAssets, t.give));
+  pickers.appendChild(taAssetCard(theirName + " sends", theirAssets, t.get));
+  main.appendChild(pickers);
+  if (give.length || get.length) {
+    const clear = el("button", { class: "lp-btn lp-btn-ghost ta-clear", type: "button" }, "Clear trade");
+    clear.addEventListener("click", () => { t.give.clear(); t.get.clear(); render(); });
+    main.appendChild(clear);
+  }
+}
+
+function taAssetCard(title, assets, selected) {
+  const card = el("div", { class: "card" }, el("h2", {}, title));
+  if (!assets.length) { card.appendChild(el("div", { class: "empty" }, "No assets.")); return card; }
+  assets.forEach(a => {
+    const on = selected.has(a.id);
+    const row = el("button", { class: "ta-row" + (on ? " on" : ""), type: "button", "aria-pressed": on ? "true" : "false" },
+      el("span", { class: "ta-check" }, on ? "✓" : ""),
+      el("span", { class: "ta-name" }, a.name,
+        el("span", { class: "pos-chip " + (a.kind === "pick" ? "pos-other" : positionClass(a.position)), style: "margin-left:8px" }, a.kind === "pick" ? "PICK" : a.position),
+        a.age ? el("span", { class: "ta-meta" }, " · " + a.age + "y") : null),
+      el("span", { class: "ta-val" }, taFmt(a.value), el("small", {}, a.tier ? a.tier.label : "")),
+    );
+    row.addEventListener("click", () => {
+      if (selected.has(a.id)) selected.delete(a.id); else selected.add(a.id);
+      render();
+    });
+    card.appendChild(row);
+  });
+  return card;
+}
+
+// Shared valuation model for a league: every roster's assets (players +
+// owned future picks) priced the way the Rosters tab shows them, plus the
+// positional-need helpers. Used by the Rosters tab and the Trade Analyzer.
+// Returns null until Sleeper + KTC data are loaded.
+function leagueAssetModel() {
+  if (!state.sleeper || !state.sleeper.seasons || !state.sleeper.seasons.length) return null;
+  if (!state.ktcDynasty || !state.ktcDynasty.players) return null;
   const latestSeason = state.sleeper.seasons[state.sleeper.seasons.length - 1];
   const ktcRaw = state.ktcDynasty.players || {};
   const ktcPlayers = {};
@@ -2691,25 +2859,6 @@ function renderRosters() {
     flockByName[p.normName] = p.flockValue;
   });
   const tradedPicks = state.sleeper.traded_picks || [];
-
-  // ---------- Team selector ----------
-  const users = sortUsersHenryFirst(latestSeason.users);
-  if (state.rosterTeam == null && users.length) state.rosterTeam = users[0].user_id;
-  const opts = users.map(u => ({ value: u.user_id, label: canonicalOwnerName(userDisplay(u)) }));
-  const controls = el("div", { class: "controls" });
-  controls.appendChild(customSelect(opts, state.rosterTeam, v => {
-    state.rosterTeam = v;
-    render();
-  }));
-  main.appendChild(controls);
-
-  const selectedUser = users.find(u => u.user_id === state.rosterTeam);
-  const selectedRoster = latestSeason.rosters.find(r => r.owner_id === state.rosterTeam);
-  if (!selectedRoster) {
-    main.appendChild(el("div", { class: "empty" }, "Roster not found."));
-    return;
-  }
-  const selectedName = canonicalOwnerName(userDisplay(selectedUser));
 
   // ---------- Pick ownership map ----------
   const currentRookieDraft = (latestSeason.drafts || []).find(
@@ -2871,6 +3020,94 @@ function renderRosters() {
     if (realWeak.length) return new Set(realWeak);
     return weakestStarterPositions(rosterId);
   }
+
+  // Starter value per position for an arbitrary player list, and league
+  // ranks with optional roster overrides ({ roster_id: [pids] }) — lets the
+  // Trade Analyzer show "before → after" lineup ranks for a hypothetical deal.
+  function starterValsForPids(pids) {
+    const byPos = { QB: [], RB: [], WR: [], TE: [] };
+    (pids || []).forEach(pid => {
+      const p = state.sleeper.players[pid];
+      if (!p || !POS.includes(p.position)) return;
+      byPos[p.position].push(ktcPlayers[ktcNormalizeName(p.name)] || 0);
+    });
+    const starters = { QB: 0, RB: 0, WR: 0, TE: 0 };
+    POS.forEach(pos => {
+      const sorted = byPos[pos].slice().sort((a, b) => b - a);
+      starters[pos] = sorted.slice(0, STARTING_SLOT_COUNT[pos]).reduce((a, b) => a + b, 0);
+    });
+    return starters;
+  }
+  function starterRanksWith(overrides) {
+    const vals = {};
+    latestSeason.rosters.forEach(r => {
+      const pids = overrides && overrides[r.roster_id] ? overrides[r.roster_id] : (r.players || []);
+      vals[r.roster_id] = starterValsForPids(pids);
+    });
+    const ranks = { QB: {}, RB: {}, WR: {}, TE: {} };
+    POS.forEach(pos => {
+      const sorted = latestSeason.rosters.slice().sort((a, b) => vals[b.roster_id][pos] - vals[a.roster_id][pos]);
+      sorted.forEach((r, i) => { ranks[pos][r.roster_id] = i + 1; });
+    });
+    return ranks;
+  }
+
+  return {
+    latestSeason, ktcPlayers, ktcPicks, flockByName, tradedPicks, currentYear, POS,
+    picksOwnedBy, enrichPlayer, assetsForRoster,
+    valueByPosByRoster, leagueAvgByPos, isWeakAt, starterRankByPos, weakestStarterPositions, needSetFor,
+    starterValsForPids, starterRanksWith,
+  };
+}
+
+function renderRosters() {
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  ensureSleeperLoaded();
+  ensureKtcDynastyLoaded();
+  ensureFlockLoaded();
+  ensureLineupDataLoaded();  // powers the projection override for old players
+
+  if (!state.sleeper) {
+    main.appendChild(el("div", { class: "empty" },
+      state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading Sleeper data…"));
+    return;
+  }
+  if (!state.ktcDynasty) {
+    main.appendChild(el("div", { class: "empty" },
+      state.ktcDynastyError ? "KTC error: " + state.ktcDynastyError : "Loading current KTC values…"));
+    return;
+  }
+
+  const M = leagueAssetModel();
+  if (!M) {
+    main.appendChild(el("div", { class: "empty" }, "Loading league data…"));
+    return;
+  }
+  const {
+    latestSeason, ktcPlayers, ktcPicks, tradedPicks, currentYear, POS,
+    picksOwnedBy, enrichPlayer, assetsForRoster,
+    valueByPosByRoster, leagueAvgByPos, isWeakAt, starterRankByPos, weakestStarterPositions, needSetFor,
+  } = M;
+
+  // ---------- Team selector ----------
+  const users = sortUsersHenryFirst(latestSeason.users);
+  if (state.rosterTeam == null && users.length) state.rosterTeam = users[0].user_id;
+  const opts = users.map(u => ({ value: u.user_id, label: canonicalOwnerName(userDisplay(u)) }));
+  const controls = el("div", { class: "controls" });
+  controls.appendChild(customSelect(opts, state.rosterTeam, v => {
+    state.rosterTeam = v;
+    render();
+  }));
+  main.appendChild(controls);
+
+  const selectedUser = users.find(u => u.user_id === state.rosterTeam);
+  const selectedRoster = latestSeason.rosters.find(r => r.owner_id === state.rosterTeam);
+  if (!selectedRoster) {
+    main.appendChild(el("div", { class: "empty" }, "Roster not found."));
+    return;
+  }
+  const selectedName = canonicalOwnerName(userDisplay(selectedUser));
 
   const myAssets = assetsForRoster(selectedRoster.roster_id);
 
@@ -6854,6 +7091,7 @@ const WORKSPACE_TABS = {
   team: [
     { view: "liveDraft", label: "Live Draft" },
     { view: "teams", label: "Teams" },
+    { view: "trade", label: "Trade" },
     { view: "lineup", label: "Lineup" },
     { view: "waivers", label: "Waivers" },
     { view: "allPlayers", label: "All Players" },
@@ -7654,6 +7892,7 @@ function render() {
     case "overview": renderOverview(); break;
     // Team workspace
     case "teams": renderTeams(); break;
+    case "trade": renderTradeAnalyzer(); break;
     case "lineup": renderLineup(); break;
     case "waivers": renderWaivers(); break;
     case "allPlayers": renderAllPlayers(); break;

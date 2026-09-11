@@ -3,6 +3,11 @@
 // players. Cached aggressively because dynasty values move slowly.
 
 function extractPlayersArrayJson(html) {
+  // Current KTC pages ship the full array in a JSON script tag:
+  //   <script id="ktc-players" type="application/json">[...]</script>
+  // Older captures (and the Wayback ones) inline `var playersArray = [...]`.
+  const tag = html.match(/<script[^>]*id="ktc-players"[^>]*>([\s\S]*?)<\/script>/);
+  if (tag && tag[1].trim().startsWith("[")) return tag[1].trim();
   let start = html.indexOf("playersArray");
   if (start < 0) return null;
   start = html.indexOf("[", start);
@@ -78,6 +83,16 @@ export default async function handler(req, res) {
       if (!m) return null;
       return { season: m[1], tier: m[2].toLowerCase(), round: parseInt(m[3], 10) };
     }
+    // Current-season picks are listed per slot ("2026 Pick 1.07"); the app keys
+    // picks by tier, so those get averaged into Early (1–4) / Mid (5–8) / Late (9+).
+    const slotVals = {};  // "season|tier|round" -> [values]
+    function parseSlotPick(name) {
+      const m = (name || "").trim().match(/^(\d{4})\s+Pick\s+(\d+)\.(\d+)$/i);
+      if (!m) return null;
+      const slot = parseInt(m[3], 10);
+      const tier = slot <= 4 ? "early" : slot <= 8 ? "mid" : "late";
+      return { season: m[1], tier, round: parseInt(m[2], 10) };
+    }
     for (const p of players) {
       if (!p.playerName) continue;
       const base = (format === "1qb" ? p.oneQBValues : p.superflexValues) || {};
@@ -87,7 +102,9 @@ export default async function handler(req, res) {
       const val = sf.value || 0;
       if (p.position === "RDP" || p.position === "PICK") {
         const parsed = parsePickName(p.playerName);
-        if (parsed) picks[`${parsed.season}|${parsed.tier}|${parsed.round}`] = val;
+        if (parsed) { picks[`${parsed.season}|${parsed.tier}|${parsed.round}`] = val; continue; }
+        const slot = parseSlotPick(p.playerName);
+        if (slot) (slotVals[`${slot.season}|${slot.tier}|${slot.round}`] ??= []).push(val);
         continue;
       }
       byName[normalizeName(p.playerName)] = {
@@ -100,6 +117,9 @@ export default async function handler(req, res) {
         age: typeof p.age === "number" ? Math.floor(p.age) : null,
         rookie: !!p.rookie,
       };
+    }
+    for (const [key, vals] of Object.entries(slotVals)) {
+      if (picks[key] == null && vals.length) picks[key] = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
     }
     const data = { players: byName, picks, format, tep: tep || null, updated: Date.now() };
     caches[cacheKey] = { data, at: Date.now() };

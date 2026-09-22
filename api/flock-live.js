@@ -126,6 +126,7 @@ export default async function handler(req, res) {
         team: p.team || null,
         averageRank: p.averageRank,
         posRank: p.averagePositionalRank != null ? p.averagePositionalRank : null,
+        rankDelta: typeof p.rankDelta === "number" ? p.rankDelta : null,
         isRookie: !!p.isRookie,
       }))
       .sort((a, b) => a.averageRank - b.averageRank);

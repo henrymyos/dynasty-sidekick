@@ -2,7 +2,7 @@
 // head-to-head records, playoff head-to-heads, and championship-round stats.
 // This data predates the Sleeper era, so it can only come from the sheet.
 const SHEET_ID = "13Zcy7vSsDFhDbbbOaQMeBXED_5va1gGLLnFQ-UlPGeo";
-const RANGE = "'All Time Record'!A1:N45";
+const RANGE = "'All Time Record'!A1:Z120"; // generous; the API trims empty cells and the parser finds the names itself
 
 export default async function handler(req, res) {
   const key = process.env.GOOGLE_API_KEY || process.env.Google_API_KEY;

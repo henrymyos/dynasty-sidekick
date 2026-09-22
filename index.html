@@ -687,6 +687,45 @@
   .tc-badge { position: absolute; top: 3px; left: 50%; transform: translateX(-50%); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #e8cc00; background: rgba(13,17,23,.9); padding: 1px 5px; border-radius: 6px; z-index: 1; }
   .tc-card-name { font-size: 11px; width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tc-card-val { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tc-card-val .tc-trend { margin-left: 4px; }
+  .tc-trend { font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tc-trend.up { color: var(--hit); }
+  .tc-trend.down { color: var(--miss); }
+  .tc-spark { display: inline-flex; align-items: center; line-height: 0; }
+  .tc-from { color: var(--accent); }
+  .tc-owner { position: absolute; top: 4px; right: 4px; font-size: 9px; font-weight: 700; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; }
+  .tc-gives { font-size: 12px; color: var(--muted); margin: -4px 2px 10px; }
+  .tc-extra-team { display: inline-flex; align-items: center; gap: 2px; }
+  .tc-panels.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tc-panels.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (max-width: 1100px) { .tc-panels.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 800px) { .tc-panels.cols-3, .tc-panels.cols-4 { grid-template-columns: 1fr; } }
+  .tc-team-chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+  .tc-team-chip { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--panel-2); border-left-width: 4px; }
+  .tc-team-chip.tone-none { border-left-color: var(--border); }
+  .tc-team-chip.tone-fair { border-left-color: #ffd700; }
+  .tc-team-chip.tone-slight-win, .tc-team-chip.tone-win, .tc-team-chip.tone-rob-them { border-left-color: #5fd801; }
+  .tc-team-chip.tone-slight-lose { border-left-color: #e8b830; }
+  .tc-team-chip.tone-lose { border-left-color: #d86d01; }
+  .tc-team-chip.tone-rob-you { border-left-color: #dc2626; }
+  .tc-team-chip { background: var(--panel-2) !important; }
+  .tc-chip-name { font-weight: 600; }
+  .tc-chip-net { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tc-chip-word { font-size: 11px; color: var(--muted); }
+  .tc-deals { display: flex; flex-direction: column; gap: 6px; }
+  .tc-deal { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: var(--text); font: inherit; cursor: pointer; }
+  .tc-deal:hover { border-color: var(--accent); }
+  .tc-deal-main { min-width: 0; }
+  .tc-deal-line { font-size: 14px; }
+  .tc-deal-give { color: var(--miss); }
+  .tc-deal-get { color: var(--hit); }
+  .tc-deal-with { color: var(--muted); }
+  .tc-deal-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; margin-top: 5px; align-items: center; }
+  .tc-deal-load { color: var(--accent); white-space: nowrap; font-weight: 600; }
+  .tc-movers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { .tc-movers-grid { grid-template-columns: 1fr; } }
+  .tc-mover { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 0; border-top: 1px solid var(--border); }
+  .tc-mover .tc-avatar { width: 34px; height: 34px; }
   .draft-pill {
     display: inline-block;
     padding: 2px 6px;
@@ -2728,8 +2767,11 @@ function buildTierLegendCard() {
 }
 
 // ===== Trade Calculator (Team workspace) =====
-// Modelled on Flock Fantasy's trade calculator: two "receive" columns, a
-// centred balance bar, a one-line verdict, and gold "Balance" suggestions.
+// Modelled on Flock Fantasy's trade calculator: "receive" columns per team, a
+// centred balance bar, a one-line verdict, and gold "Balance" suggestions —
+// plus three things Flock doesn't do for this league: three- and four-team
+// deals, shareable links (#trade=…), and a trade finder that searches every
+// roster for fair deals that fix your weakest starting spot.
 //
 // Values: Flock publishes ranks (an expert-average overall rank, with draft
 // picks ranked in the same list), not values. A Flock rank is priced by
@@ -2741,6 +2783,7 @@ function buildTierLegendCard() {
 // Sleeper pick slots and tiers.
 const TC_FLOCK_W = 0.7;
 const TC_DECAY = 0.9;   // consolidation: the 2nd, 3rd… piece on a side counts 90%, 81%…
+const TC_MAX_TEAMS = 4;
 
 // KTC's value-by-rank curve: value of the r-th best player (interpolated).
 function tcValueCurve(ktcPlayers) {
@@ -2788,8 +2831,20 @@ function tcFlockPickRank(flockPicks, season, round, tier, nTeams) {
   return avg(combos.length ? combos : same);
 }
 
+// Four-week KTC trend for a player/pick from the weekly snapshot series.
+function tcTrend(series) {
+  if (!series) return null;
+  const pts = series.map((v, i) => ({ v, i })).filter(p => p.v != null);
+  if (pts.length < 2) return null;
+  const cur = pts[pts.length - 1];
+  const baseIdx = Math.max(0, series.length - 5);      // ≈ 4 weekly snapshots back
+  const base = pts.filter(p => p.i <= baseIdx).pop() || pts[0];
+  if (base.i === cur.i) return null;
+  return { delta: cur.v - base.v, spark: pts.map(p => p.v) };
+}
+
 // Every roster's assets priced for the calculator. Null until Sleeper + KTC
-// are loaded; Flock is optional (KTC-only values until it arrives).
+// are loaded; Flock and value history are optional.
 function tcAssetModel() {
   const M = leagueAssetModel();
   if (!M) return null;
@@ -2797,29 +2852,43 @@ function tcAssetModel() {
   const flock = {};
   ((state.flockLive && state.flockLive.allPlayers) || []).forEach(p => { flock[p.normName] = p; });
   const flockPicks = (state.flockLive && state.flockLive.picks) || [];
+  const hist = state.valuesHist || null;
   const nTeams = M.latestSeason.rosters.length || 12;
   const blend = (fv, kv) => (fv && kv) ? TC_FLOCK_W * fv + (1 - TC_FLOCK_W) * kv : (fv || kv || 0);
   const pickRankCache = {};
   function price(a) {
     if (a.kind === "player") {
       const p = state.sleeper.players[a.id] || {};
-      const f = flock[ktcNormalizeName(p.name)];
+      const norm = ktcNormalizeName(p.name);
+      const f = flock[norm];
       const fv = f ? atRank(f.averageRank) : 0;
-      return { ...a, value: blend(fv, a.ktc), ovr: f ? f.averageRank : null, posRank: f ? f.posRank : null, team: p.team || null };
+      const h = hist && hist.players[norm];
+      return { ...a, value: blend(fv, a.ktc), ovr: f ? f.averageRank : null, posRank: f ? f.posRank : null,
+        team: p.team || null, trend: h ? tcTrend(h.v) : null };
     }
     const tier = a.name.split(" ")[1].toLowerCase();   // "2026 Early 1st" → early
-    const key = a.season + "|" + a.round + "|" + tier;
+    const key = a.season + "|" + tier + "|" + a.round;
     if (!(key in pickRankCache)) pickRankCache[key] = tcFlockPickRank(flockPicks, a.season, a.round, tier, nTeams);
     const r = pickRankCache[key];
-    return { ...a, value: blend(r ? atRank(r) : 0, a.ktc), ovr: r, posRank: null, team: null };
+    const h = hist && hist.picks[key];
+    return { ...a, value: blend(r ? atRank(r) : 0, a.ktc), ovr: r, posRank: null, team: null, trend: h ? tcTrend(h) : null };
   }
-  const byRoster = {};
-  M.latestSeason.rosters.forEach(r => { byRoster[r.roster_id] = M.assetsForRoster(r.roster_id).map(price); });
-  return { ...M, byRoster, hasFlock: !!state.flockLive };
+  const byRoster = {}, byUser = {}, ownerOf = {}, userOfRoster = {}, rosterOfUser = {};
+  M.latestSeason.rosters.forEach(r => {
+    const assets = M.assetsForRoster(r.roster_id).map(price);
+    byRoster[r.roster_id] = assets;
+    byUser[r.owner_id] = assets;
+    userOfRoster[r.roster_id] = r.owner_id;
+    rosterOfUser[r.owner_id] = r.roster_id;
+    assets.forEach(a => { ownerOf[a.id] = r.owner_id; });
+  });
+  return { ...M, byRoster, byUser, ownerOf, userOfRoster, rosterOfUser, hasFlock: !!state.flockLive, hasHist: !!hist };
 }
 
 function tcFmt(n) { return Math.round(n).toLocaleString(); }
+function tcSigned(n) { return (n > 0 ? "+" : n < 0 ? "−" : "") + tcFmt(Math.abs(n)); }
 function tcShort(name) { const p = name.split(" "); return p.length > 1 && !/^\d{4}$/.test(p[0]) ? p[0][0] + ". " + p.slice(1).join(" ") : name; }
+function tcInitials(name) { return name.split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase(); }
 function tcAdjusted(assets) {
   return assets.slice().sort((a, b) => b.value - a.value).reduce((s, a, i) => s + a.value * Math.pow(TC_DECAY, i), 0);
 }
@@ -2832,6 +2901,13 @@ function tcVerdict(user, opp) {
   if (g > 8.5) return win ? "You slightly win!" : "You slightly lose!";
   return "Fair trade!";
 }
+function tcWord(gets, gives) {   // per-team verdict word for multi-team deals
+  const g = tcGapPct(gets, gives), win = gets > gives;
+  if (g > 42.5) return win ? "robbery" : "robbed";
+  if (g > 17) return win ? "wins" : "loses";
+  if (g > 8.5) return win ? "slight win" : "slight loss";
+  return "fair";
+}
 function tcTone(user, opp) {
   const g = tcGapPct(user, opp), win = user > opp;
   return g > 50 ? (win ? "rob-them" : "rob-you") : g > 20 ? (win ? "win" : "lose") : g > 10 ? (win ? "slight-win" : "slight-lose") : "fair";
@@ -2840,6 +2916,20 @@ function tcAvatar(a, big) {
   if (a.kind === "pick") return el("div", { class: "tc-avatar pick" + (big ? " big" : "") }, "PK");
   return el("img", { class: "tc-avatar" + (big ? " big" : ""), src: "https://sleepercdn.com/content/nfl/players/thumb/" + a.id + ".jpg", alt: "",
     loading: "lazy", onerror: e => { e.target.replaceWith(el("div", { class: "tc-avatar pick" + (big ? " big" : "") }, a.position || "?")); } });
+}
+// Tiny inline sparkline of the weekly KTC values.
+function tcSpark(trend) {
+  if (!trend || trend.spark.length < 2) return null;
+  const s = trend.spark, w = 56, h = 16, min = Math.min(...s), max = Math.max(...s), span = (max - min) || 1;
+  const pts = s.map((v, i) => (i / (s.length - 1) * (w - 2) + 1).toFixed(1) + "," + ((h - 2) - (v - min) / span * (h - 4) + 1).toFixed(1)).join(" ");
+  const color = trend.delta > 0 ? "#2ea043" : trend.delta < 0 ? "#f85149" : "#8b949e";
+  return el("span", { class: "tc-spark", title: "KTC value, weekly", html:
+    `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><polyline fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" points="${pts}"/></svg>` });
+}
+function tcTrendChip(trend, small) {
+  if (!trend || Math.abs(trend.delta) < (small ? 150 : 1)) return null;
+  const up = trend.delta > 0;
+  return el("span", { class: "tc-trend " + (up ? "up" : "down"), title: "KTC value change over ~4 weeks" }, (up ? "▲" : "▼") + tcFmt(Math.abs(trend.delta)));
 }
 // Up to three assets from `pool` that, added to the side that's short, land
 // the deal in (or nearest) the fair band. Shown as gold "Balance" cards.
@@ -2850,14 +2940,139 @@ function tcSuggest(pool, chosen, otherTotal) {
     .sort((x, y) => x.gap - y.gap).slice(0, 3).map(x => x.a.id);
 }
 
+/* ---- trade state + shareable links ----
+   state.trade = { teams: [user_id…], recv: { user_id: Set(asset id) }, q: { user_id: search }, finder }
+   Encoded in the URL as #trade=<uid>~<id,id>|<uid>~<id>… so a deal can be texted around. */
+function tcBlankTrade() { return { teams: [], recv: {}, q: {}, finder: null, finderOpen: false }; }
+function tcEncode(t) {
+  if (!t.teams.length) return "";
+  return "trade=" + t.teams.map(u => u + "~" + [...(t.recv[u] || [])].join(",")).join("|");
+}
+function tcDecode(hash) {
+  const m = (hash || "").match(/^#?trade=(.+)$/);
+  if (!m) return null;
+  const t = tcBlankTrade();
+  try {
+    decodeURIComponent(m[1]).split("|").forEach(part => {
+      const [uid, ids] = part.split("~");
+      if (!uid) return;
+      t.teams.push(uid);
+      t.recv[uid] = new Set(ids ? ids.split(",").filter(Boolean) : []);
+      t.q[uid] = "";
+    });
+  } catch { return null; }
+  return t.teams.length >= 2 ? t : null;
+}
+function tcSyncHash(t) {
+  const any = t.teams.some(u => t.recv[u] && t.recv[u].size);
+  const want = any ? "#" + tcEncode(t) : "";
+  if (location.hash !== want) {
+    try { history.replaceState(null, "", want || location.pathname + location.search); } catch {}
+  }
+}
+// Called once at boot: a #trade= link opens straight into the calculator.
+function tcApplyHash() {
+  const t = tcDecode(location.hash);
+  if (!t) return;
+  state.trade = t;
+  state.workspace = "team";
+  state.view = "trade";
+}
+
+async function loadValuesHist() {
+  if (state.valuesHistLoading || state.valuesHist) return;
+  state.valuesHistLoading = true;
+  state.valuesHistError = null;
+  try {
+    const res = await fetch("/api/values-history", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.valuesHist = data;
+  } catch (e) {
+    state.valuesHistError = e.message;
+  } finally {
+    state.valuesHistLoading = false;
+    render();
+  }
+}
+function ensureValuesHistLoaded() {
+  if (!state.valuesHist && !state.valuesHistLoading && !state.valuesHistError) loadValuesHist();
+}
+
+/* ---- trade finder ----
+   For your team, try every 1-for-1, 2-for-1, 1-for-2 and 2-for-2 built from
+   each side's most valuable pieces, keep the ones inside Flock's fair band,
+   then score the survivors by what they do to both starting lineups. */
+function tcFindTrades(M, meUid) {
+  const meRid = M.rosterOfUser[meUid];
+  if (meRid == null) return [];
+  const POS = M.POS;
+  const before = M.starterRanksWith(null);
+  const myNeeds = M.needSetFor(meRid);
+  const rosterPids = rid => (M.latestSeason.rosters.find(r => r.roster_id === rid) || {}).players || [];
+  const topN = (assets, n) => assets.slice().sort((a, b) => b.value - a.value).slice(0, n);
+  const subsets = list => {   // all 1- and 2-piece subsets
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      out.push([list[i]]);
+      for (let j = i + 1; j < list.length; j++) out.push([list[i], list[j]]);
+    }
+    return out;
+  };
+  const mine = subsets(topN(M.byRoster[meRid], 14)).map(s => ({ s, adj: tcAdjusted(s) }));
+  const results = [];
+  M.latestSeason.rosters.forEach(r => {
+    if (r.roster_id === meRid) return;
+    const theirs = subsets(topN(M.byRoster[r.roster_id], 14)).map(s => ({ s, adj: tcAdjusted(s) }));
+    const fair = [];
+    mine.forEach(g => theirs.forEach(h => {
+      const gap = tcGapPct(h.adj, g.adj);
+      if (gap <= 10 && !(g.s.length === 2 && h.s.length === 2 && gap > 6)) fair.push({ give: g.s, get: h.s, gap });
+    }));
+    fair.sort((a, b) => a.gap - b.gap).slice(0, 250).forEach(d => {
+      const givePids = new Set(d.give.filter(a => a.kind === "player").map(a => a.id));
+      const getPids = new Set(d.get.filter(a => a.kind === "player").map(a => a.id));
+      if (!givePids.size && !getPids.size) return;   // pick-for-pick: nothing to fix
+      const myAfter = rosterPids(meRid).filter(p => !givePids.has(p)).concat([...getPids]);
+      const theirAfter = rosterPids(r.roster_id).filter(p => !getPids.has(p)).concat([...givePids]);
+      const after = M.starterRanksWith({ [meRid]: myAfter, [r.roster_id]: theirAfter });
+      let myGain = 0, theirGain = 0, needFixed = false;
+      POS.forEach(pos => {
+        const dm = before[pos][meRid] - after[pos][meRid];
+        myGain += dm;
+        if (dm > 0 && myNeeds.has(pos)) needFixed = true;
+        theirGain += before[pos][r.roster_id] - after[pos][r.roster_id];
+      });
+      if (myGain <= 0 || theirGain < -2) return;
+      const pieces = d.give.length + d.get.length;
+      const score = myGain * 3 + theirGain + (needFixed ? 2 : 0) + (10 - d.gap) / 5 - (pieces - 2) * 0.5;
+      results.push({ partnerUid: r.owner_id, give: d.give, get: d.get, gap: d.gap, myGain, theirGain, needFixed, score });
+    });
+  });
+  results.sort((a, b) => b.score - a.score);
+  const out = [], perPartner = {}, seen = new Set();
+  for (const d of results) {
+    const key = d.give.map(a => a.id).sort().join() + ">" + d.get.map(a => a.id).sort().join();
+    if (seen.has(key)) continue;
+    perPartner[d.partnerUid] = (perPartner[d.partnerUid] || 0) + 1;
+    if (perPartner[d.partnerUid] > 3) continue;
+    seen.add(key);
+    out.push(d);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
 function renderTradeAnalyzer() {
   const main = document.getElementById("main");
   main.innerHTML = "";
   ensureSleeperLoaded();
   ensureKtcDynastyLoaded();
   ensureFlockLoaded();
+  ensureValuesHistLoaded();
   main.appendChild(el("div", { class: "section-header" }, "Trade Calculator",
-    el("span", { class: "section-sub" }, "Build a deal from both rosters — who wins, by how much, and what would balance it")));
+    el("span", { class: "section-sub" }, "Build a deal between two, three or four teams — who wins, by how much, and what would balance it")));
   if (!state.sleeper) {
     main.appendChild(el("div", { class: "empty" }, state.sleeperError ? "Sleeper error: " + state.sleeperError : "Loading league…"));
     return;
@@ -2868,126 +3083,203 @@ function renderTradeAnalyzer() {
     return;
   }
   const { latestSeason, POS } = M;
-  if (!state.trade) state.trade = { myTeam: null, partner: null, give: new Set(), get: new Set(), qGive: "", qGet: "" };
+  if (!state.trade || !state.trade.teams) state.trade = tcBlankTrade();
   const t = state.trade;
-  const users = sortUsersHenryFirst(latestSeason.users);
-  if (!users.length) { main.appendChild(el("div", { class: "empty" }, "No teams found.")); return; }
-  if (!t.myTeam || !users.some(u => u.user_id === t.myTeam)) {
-    t.myTeam = (state.rosterTeam && users.some(u => u.user_id === state.rosterTeam)) ? state.rosterTeam : users[0].user_id;
+  const users = sortUsersHenryFirst(latestSeason.users).filter(u => M.rosterOfUser[u.user_id] != null);
+  if (users.length < 2) { main.appendChild(el("div", { class: "empty" }, "Need at least two teams.")); return; }
+  const label = uid => { const u = users.find(x => x.user_id === uid); return u ? canonicalOwnerName(userDisplay(u)) : "Team"; };
+  // Default teams: you + the first other manager. Drop any team we can't find.
+  t.teams = t.teams.filter(uid => users.some(u => u.user_id === uid));
+  if (!t.teams.length) {
+    const mineUid = (state.rosterTeam && users.some(u => u.user_id === state.rosterTeam)) ? state.rosterTeam : users[0].user_id;
+    t.teams.push(mineUid);
   }
-  if (!t.partner || t.partner === t.myTeam || !users.some(u => u.user_id === t.partner)) {
-    const other = users.find(u => u.user_id !== t.myTeam);
-    t.partner = other ? other.user_id : null;
-  }
-  const opts = users.map(u => ({ value: u.user_id, label: canonicalOwnerName(userDisplay(u)) }));
-  const myRoster = latestSeason.rosters.find(r => r.owner_id === t.myTeam);
-  const theirRoster = latestSeason.rosters.find(r => r.owner_id === t.partner);
-  if (!myRoster || !theirRoster) { main.appendChild(el("div", { class: "empty" }, "Pick two teams.")); return; }
-  const myName = (opts.find(o => o.value === t.myTeam) || {}).label || "You";
-  const theirName = (opts.find(o => o.value === t.partner) || {}).label || "Partner";
-  const myAssets = M.byRoster[myRoster.roster_id] || [];
-  const theirAssets = M.byRoster[theirRoster.roster_id] || [];
-  [...t.give].forEach(id => { if (!myAssets.some(a => a.id === id)) t.give.delete(id); });
-  [...t.get].forEach(id => { if (!theirAssets.some(a => a.id === id)) t.get.delete(id); });
-  const give = myAssets.filter(a => t.give.has(a.id));   // they receive
-  const get = theirAssets.filter(a => t.get.has(a.id));  // I receive
-  const oppValue = tcAdjusted(give), userValue = tcAdjusted(get);
-  const both = give.length > 0 && get.length > 0;
+  if (t.teams.length < 2) t.teams.push(users.find(u => u.user_id !== t.teams[0]).user_id);
+  t.teams.forEach(uid => { if (!t.recv[uid]) t.recv[uid] = new Set(); if (t.q[uid] == null) t.q[uid] = ""; });
+  // A team may only receive assets owned by another team in the deal.
+  t.teams.forEach(uid => {
+    [...t.recv[uid]].forEach(id => {
+      const owner = M.ownerOf[id];
+      if (!owner || owner === uid || !t.teams.includes(owner)) t.recv[uid].delete(id);
+    });
+  });
+  tcSyncHash(t);
+
+  const me = t.teams[0];
+  const recvAssets = uid => [...t.recv[uid]].map(id => (M.byUser[M.ownerOf[id]] || []).find(a => a.id === id)).filter(Boolean);
+  const givenAssets = uid => t.teams.filter(o => o !== uid).flatMap(o => recvAssets(o)).filter(a => M.ownerOf[a.id] === uid);
+  const sides = t.teams.map(uid => {
+    const gets = recvAssets(uid), gives = givenAssets(uid);
+    return { uid, gets, gives, getsAdj: tcAdjusted(gets), givesAdj: tcAdjusted(gives) };
+  });
+  const anyChosen = sides.some(s => s.gets.length);
+  const multi = t.teams.length > 2;
+  const userValue = sides[0].getsAdj, oppValue = multi ? sides[0].givesAdj : sides[1].getsAdj;
+  const both = multi ? sides.every(s => s.gets.length || s.gives.length) && sides[0].gets.length + sides[0].gives.length > 0
+    : sides[0].gets.length > 0 && sides[1].gets.length > 0;
 
   // ---------- Controls ----------
   const controls = el("div", { class: "controls ta-controls" });
+  const teamSelect = (idx) => {
+    const taken = t.teams.filter((_, i) => i !== idx);
+    const opts = users.filter(u => !taken.includes(u.user_id)).map(u => ({ value: u.user_id, label: label(u.user_id) }));
+    return customSelect(opts, t.teams[idx], v => {
+      const old = t.teams[idx];
+      t.teams[idx] = v;
+      delete t.recv[old]; t.recv[v] = new Set(); t.q[v] = "";
+      t.finder = null; render();
+    });
+  };
   controls.appendChild(el("span", { class: "ta-label" }, "Your team"));
-  controls.appendChild(customSelect(opts, t.myTeam, v => {
-    if (v === t.partner) t.partner = t.myTeam;
-    t.myTeam = v; t.give.clear(); t.get.clear(); render();
-  }));
+  controls.appendChild(teamSelect(0));
   controls.appendChild(el("span", { class: "ta-label" }, "Trading with"));
-  controls.appendChild(customSelect(opts.filter(o => o.value !== t.myTeam), t.partner, v => {
-    t.partner = v; t.get.clear(); render();
-  }));
-  if (give.length || get.length) {
-    const clear = el("button", { class: "lp-btn lp-btn-ghost tc-clear", type: "button", title: "Clear trade" }, "🗑 Clear");
-    clear.addEventListener("click", () => { t.give.clear(); t.get.clear(); render(); });
-    controls.appendChild(clear);
+  controls.appendChild(teamSelect(1));
+  for (let i = 2; i < t.teams.length; i++) {
+    const wrap = el("span", { class: "tc-extra-team" }, teamSelect(i));
+    const x = el("button", { class: "tc-x", type: "button", title: "Remove this team" }, "×");
+    x.addEventListener("click", () => { const uid = t.teams[i]; t.teams.splice(i, 1); delete t.recv[uid]; render(); });
+    wrap.appendChild(x);
+    controls.appendChild(wrap);
   }
+  const actions = el("div", { class: "tc-actions" });
+  if (t.teams.length < TC_MAX_TEAMS && users.length > t.teams.length) {
+    const add = el("button", { class: "lp-btn lp-btn-ghost", type: "button" }, "+ Add team");
+    add.addEventListener("click", () => {
+      const next = users.find(u => !t.teams.includes(u.user_id));
+      if (next) { t.teams.push(next.user_id); t.recv[next.user_id] = new Set(); t.q[next.user_id] = ""; render(); }
+    });
+    actions.appendChild(add);
+  }
+  const find = el("button", { class: "lp-btn lp-btn-ghost", type: "button", title: "Search every roster for fair deals that improve your lineup" }, t.finderOpen ? "Hide finder" : "🔎 Find trades");
+  find.addEventListener("click", () => {
+    t.finderOpen = !t.finderOpen;
+    if (t.finderOpen && !t.finder) t.finder = tcFindTrades(M, me);
+    render();
+  });
+  actions.appendChild(find);
+  if (anyChosen) {
+    const share = el("button", { class: "lp-btn lp-btn-ghost", type: "button", title: "Copy a link to this exact trade" }, "🔗 Copy link");
+    share.addEventListener("click", () => {
+      const url = location.origin + location.pathname + location.search + "#" + tcEncode(t);
+      const done = () => { share.textContent = "Copied!"; setTimeout(() => { share.textContent = "🔗 Copy link"; }, 1500); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done).catch(() => prompt("Copy this link", url));
+      else prompt("Copy this link", url);
+    });
+    actions.appendChild(share);
+    const clear = el("button", { class: "lp-btn lp-btn-ghost", type: "button", title: "Clear trade" }, "🗑 Clear");
+    clear.addEventListener("click", () => { t.teams.forEach(u => t.recv[u].clear()); render(); });
+    actions.appendChild(clear);
+  }
+  controls.appendChild(actions);
   main.appendChild(controls);
 
-  // ---------- Verdict + balance bar ----------
-  const verdict = el("div", { class: "tc-verdict" + (both ? "" : " pre") },
-    both ? tcVerdict(userValue, oppValue) : "Add players to both sides of the trade");
-  const bar = el("div", { class: "tc-bar" }, el("div", { class: "tc-bar-mid" }));
-  if (both) {
-    const pct = Math.abs(userValue - oppValue) / (userValue + oppValue) * 50;
-    const seg = el("div", { class: "tc-bar-seg tone-" + tcTone(userValue, oppValue) + (userValue > oppValue ? " right" : " left") });
-    seg.style.width = (pct === 0 ? 0 : Math.max(pct, 1.5)) + "%";
-    bar.appendChild(seg);
-    if (pct === 0) {   // dead even: a nub on each side, like Flock
-      const seg2 = el("div", { class: "tc-bar-seg tone-fair right" }); seg2.style.width = "1.5%";
-      seg.classList.remove("right"); seg.classList.add("left"); seg.style.width = "1.5%";
-      bar.appendChild(seg2);
-    }
-  }
-  const gapLine = both ? el("div", { class: "tc-side-labels" },
-    el("span", {}, "They receive " + tcFmt(oppValue)),
-    el("span", {}, (userValue >= oppValue ? "+" : "−") + tcFmt(Math.abs(userValue - oppValue)) + " · " + Math.round(tcGapPct(userValue, oppValue)) + "% gap"),
-    el("span", {}, "I receive " + tcFmt(userValue))) : el("div", { class: "tc-side-labels" }, el("span", {}, "They receive"), el("span", {}, "I receive"));
-  main.appendChild(el("div", { class: "card tc-top" }, verdict, bar, gapLine));
+  // ---------- Trade finder ----------
+  if (t.finderOpen) main.appendChild(tcFinderCard(M, t, label));
 
-  // ---------- Balance suggestions ----------
-  let suggestGive = [], suggestGet = [];
-  if (both && tcGapPct(userValue, oppValue) > 8.5) {
-    if (userValue < oppValue) suggestGet = tcSuggest(theirAssets, get, oppValue);   // I'm short → add to what I receive
-    else suggestGive = tcSuggest(myAssets, give, userValue);                       // they're short → add to what they receive
+  // ---------- Verdict + balance ----------
+  const top = el("div", { class: "card tc-top" });
+  if (!multi) {
+    top.appendChild(el("div", { class: "tc-verdict" + (both ? "" : " pre") },
+      both ? tcVerdict(userValue, oppValue) : "Add players to both sides of the trade"));
+    const bar = el("div", { class: "tc-bar" }, el("div", { class: "tc-bar-mid" }));
+    if (both) {
+      const pct = Math.abs(userValue - oppValue) / (userValue + oppValue) * 50;
+      if (pct === 0) {   // dead even: a nub on each side, like Flock
+        ["left", "right"].forEach(side => { const s = el("div", { class: "tc-bar-seg tone-fair " + side }); s.style.width = "1.5%"; bar.appendChild(s); });
+      } else {
+        const seg = el("div", { class: "tc-bar-seg tone-" + tcTone(userValue, oppValue) + (userValue > oppValue ? " right" : " left") });
+        seg.style.width = Math.max(pct, 1.5) + "%";
+        bar.appendChild(seg);
+      }
+    }
+    top.appendChild(bar);
+    top.appendChild(both ? el("div", { class: "tc-side-labels" },
+      el("span", {}, "They receive " + tcFmt(oppValue)),
+      el("span", {}, tcSigned(userValue - oppValue) + " · " + Math.round(tcGapPct(userValue, oppValue)) + "% gap"),
+      el("span", {}, "I receive " + tcFmt(userValue)))
+      : el("div", { class: "tc-side-labels" }, el("span", {}, "They receive"), el("span", {}, "I receive")));
+  } else {
+    top.appendChild(el("div", { class: "tc-verdict" + (both ? "" : " pre") },
+      both ? (t.teams.length + "-team trade") : "Add players so every team gives and gets something"));
+    const chips = el("div", { class: "tc-team-chips" });
+    sides.forEach(s => {
+      const net = s.getsAdj - s.givesAdj;
+      const word = (s.gets.length || s.gives.length) ? tcWord(s.getsAdj, s.givesAdj) : "—";
+      chips.appendChild(el("div", { class: "tc-team-chip tone-" + (s.gets.length || s.gives.length ? tcTone(s.getsAdj, s.givesAdj) : "none") },
+        el("div", { class: "tc-chip-name" }, label(s.uid)),
+        el("div", { class: "tc-chip-net " + (net > 0 ? "delta-pos" : net < 0 ? "delta-neg" : "") }, tcSigned(net)),
+        el("div", { class: "tc-chip-word" }, word + " · gets " + tcFmt(s.getsAdj) + " / gives " + tcFmt(s.givesAdj))));
+    });
+    top.appendChild(chips);
+  }
+  main.appendChild(top);
+
+  // ---------- Balance suggestions (two-team deals) ----------
+  const suggest = {};
+  if (!multi && both && tcGapPct(userValue, oppValue) > 8.5) {
+    if (userValue < oppValue) suggest[me] = tcSuggest(M.byUser[t.teams[1]], sides[0].gets, oppValue);
+    else suggest[t.teams[1]] = tcSuggest(M.byUser[me], sides[1].gets, userValue);
   }
 
   // ---------- Panels ----------
-  const panels = el("div", { class: "draft-grid tc-panels" });
-  panels.appendChild(tcPanel("They Receive", myName, myAssets, t.give, "qGive", suggestGive, oppValue));
-  panels.appendChild(tcPanel("I Receive", theirName, theirAssets, t.get, "qGet", suggestGet, userValue));
+  const panels = el("div", { class: "draft-grid tc-panels cols-" + t.teams.length });
+  t.teams.forEach((uid, i) => {
+    const s = sides[i];
+    const pool = t.teams.filter(o => o !== uid).flatMap(o => M.byUser[o]);
+    panels.appendChild(tcPanel(i === 0 ? "I Receive" : (multi ? label(uid) + " Receives" : "They Receive"), uid, label, pool, s, suggest[uid] || [], multi, M));
+  });
   main.appendChild(panels);
 
   // ---------- Lineup impact ----------
-  if (give.length || get.length) {
-    const givePids = new Set(give.filter(a => a.kind === "player").map(a => a.id));
-    const getPids = new Set(get.filter(a => a.kind === "player").map(a => a.id));
-    const myAfter = (myRoster.players || []).filter(p => !givePids.has(p)).concat([...getPids]);
-    const theirAfter = (theirRoster.players || []).filter(p => !getPids.has(p)).concat([...givePids]);
+  if (anyChosen) {
+    const overrides = {};
+    t.teams.forEach(uid => {
+      const rid = M.rosterOfUser[uid];
+      const roster = latestSeason.rosters.find(r => r.roster_id === rid);
+      const s = sides.find(x => x.uid === uid);
+      const out = new Set(s.gives.filter(a => a.kind === "player").map(a => a.id));
+      const inn = s.gets.filter(a => a.kind === "player").map(a => a.id);
+      overrides[rid] = (roster.players || []).filter(p => !out.has(p)).concat(inn);
+    });
     const before = M.starterRanksWith(null);
-    const after = M.starterRanksWith({ [myRoster.roster_id]: myAfter, [theirRoster.roster_id]: theirAfter });
+    const after = M.starterRanksWith(overrides);
     const nTeams = latestSeason.rosters.length;
     const cell = (b, a) => el("span", { class: a < b ? "delta-pos" : a > b ? "delta-neg" : "" }, "#" + b + (a === b ? "" : " → #" + a));
     const rows = POS.map(pos => el("tr", {},
       el("td", {}, el("span", { class: "pos-chip " + positionClass(pos) }, pos)),
-      el("td", {}, cell(before[pos][myRoster.roster_id], after[pos][myRoster.roster_id])),
-      el("td", {}, cell(before[pos][theirRoster.roster_id], after[pos][theirRoster.roster_id])),
-    ));
+      ...t.teams.map(uid => { const rid = M.rosterOfUser[uid]; return el("td", {}, cell(before[pos][rid], after[pos][rid])); })));
     const impact = el("div", { class: "card" });
     impact.appendChild(el("h2", {}, "Lineup impact ",
       el("span", { class: "section-sub" }, "league rank of each position's starters, out of " + nTeams)));
     impact.appendChild(el("table", { class: "ta-table" },
-      el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, myName), el("th", {}, theirName))),
+      el("thead", {}, el("tr", {}, el("th", {}, ""), ...t.teams.map(uid => el("th", {}, label(uid))))),
       el("tbody", {}, ...rows)));
-    const needs = ranks => POS.filter(pos => ranks[pos][myRoster.roster_id] > 4);
+    const meRid = M.rosterOfUser[me];
+    const needs = ranks => POS.filter(pos => ranks[pos][meRid] > 4);
     const nb = needs(before), na = needs(after);
     impact.appendChild(el("p", { class: "ta-note" },
       "Your needs (starters outside the league's top 4): " + (nb.length ? nb.join(", ") : "none") +
       " → after the trade: " + (na.length ? na.join(", ") : "none") + "."));
     main.appendChild(impact);
   }
+
+  // ---------- Movers ----------
+  main.appendChild(tcMoversCard(M, label));
+
   main.appendChild(el("p", { class: "ta-note tc-foot" },
     (M.hasFlock ? "Values: 70% Flock expert rank priced on KTC's value curve + 30% KTC. "
       : (state.flockLiveLoading ? "Flock rankings loading — KTC-only values for now. " : "Flock unavailable — KTC-only values. ")) +
     "Side totals count each side's best piece in full and the 2nd, 3rd… at 90%, 81%… so depth doesn't beat a star. " +
-    "Verdict bands follow Flock: under 8.5% gap is fair, 17% wins, 42.5% is a robbery."));
+    "Verdict bands follow Flock: under 8.5% gap is fair, 17% wins, 42.5% is a robbery. Arrows are the KTC value change over the last ~4 weekly snapshots."));
 }
 
-// One side of the calculator: chosen assets as rows, a total, a search box
-// and the pool as cards (balance suggestions first, chosen ones hidden).
-function tcPanel(title, teamName, pool, selected, queryKey, suggestIds, total) {
+// One team's column: what it receives as rows, a total, a search box and the
+// other teams' assets as cards (balance suggestions first, taken ones hidden).
+function tcPanel(title, uid, label, pool, side, suggestIds, multi, M) {
   const t = state.trade;
   const card = el("div", { class: "card tc-panel" });
-  card.appendChild(el("h2", {}, title, el("span", { class: "tc-team" }, "(" + teamName + ")")));
-  const chosen = pool.filter(a => selected.has(a.id)).sort((a, b) => b.value - a.value);
+  card.appendChild(el("h2", {}, title, multi ? null : el("span", { class: "tc-team" }, "(" + label(uid) + ")")));
+  const chosen = side.gets.slice().sort((a, b) => b.value - a.value);
   const rows = el("div", { class: "tc-rows" });
   if (!chosen.length) rows.appendChild(el("div", { class: "tc-empty" }, "Tap a player or pick below to add it"));
   chosen.forEach(a => {
@@ -2995,9 +3287,11 @@ function tcPanel(title, teamName, pool, selected, queryKey, suggestIds, total) {
       el("span", { class: "pos-chip " + (a.kind === "pick" ? "pos-other" : positionClass(a.position)) },
         a.kind === "pick" ? "PICK" : a.position + (a.posRank ? " " + Math.round(a.posRank) : "")),
       a.ovr ? el("span", {}, (Math.round(a.ovr * 10) / 10) + " OVR") : el("span", {}, "KTC " + tcFmt(a.ktc)),
-      a.age ? el("span", {}, a.age + "y") : null, a.team ? el("span", {}, a.team) : null);
+      a.age ? el("span", {}, a.age + "y") : null, a.team ? el("span", {}, a.team) : null,
+      multi ? el("span", { class: "tc-from" }, "from " + label(M.ownerOf[a.id])) : null,
+      tcSpark(a.trend), tcTrendChip(a.trend, false));
     const x = el("button", { class: "tc-x", type: "button", title: "Remove" }, "×");
-    x.addEventListener("click", () => { selected.delete(a.id); render(); });
+    x.addEventListener("click", () => { t.recv[uid].delete(a.id); render(); });
     rows.appendChild(el("div", { class: "tc-row" }, tcAvatar(a, false),
       el("div", { class: "tc-row-main" }, el("div", { class: "tc-row-name" }, a.name), meta),
       el("div", { class: "tc-row-val" }, tcFmt(a.value)), x));
@@ -3005,38 +3299,104 @@ function tcPanel(title, teamName, pool, selected, queryKey, suggestIds, total) {
   card.appendChild(rows);
   if (chosen.length) {
     const raw = chosen.reduce((s, a) => s + a.value, 0);
-    card.appendChild(el("div", { class: "tc-total" }, el("span", {}, chosen.length + (chosen.length === 1 ? " asset" : " assets") + (raw !== total ? " · raw " + tcFmt(raw) : "")),
-      el("span", {}, "Total ", el("b", {}, tcFmt(total)))));
+    card.appendChild(el("div", { class: "tc-total" },
+      el("span", {}, chosen.length + (chosen.length === 1 ? " asset" : " assets") + (Math.round(raw) !== Math.round(side.getsAdj) ? " · raw " + tcFmt(raw) : "")),
+      el("span", {}, "Total ", el("b", {}, tcFmt(side.getsAdj)))));
   }
-  const inputId = "tc-search-" + queryKey;
-  const search = el("input", { class: "tc-search", id: inputId, type: "search", placeholder: "Search…", autocomplete: "off", value: t[queryKey] || "" });
+  if (multi && side.gives.length) {
+    card.appendChild(el("div", { class: "tc-gives" }, "Gives away: " + side.gives.map(a => tcShort(a.name)).join(", ") + " (" + tcFmt(side.givesAdj) + ")"));
+  }
+  const inputId = "tc-search-" + uid;
+  const search = el("input", { class: "tc-search", id: inputId, type: "search", placeholder: multi ? "Search the other teams…" : "Search…", autocomplete: "off", value: t.q[uid] || "" });
   search.addEventListener("input", () => {
-    t[queryKey] = search.value;
+    t.q[uid] = search.value;
     const pos = search.selectionStart;
     render();
     const again = document.getElementById(inputId);
     if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) { /* type=search on some browsers */ } }
   });
   card.appendChild(search);
-  const q = (t[queryKey] || "").trim().toLowerCase();
+  const q = (t.q[uid] || "").trim().toLowerCase();
+  const takenAnywhere = new Set(t.teams.flatMap(o => [...t.recv[o]]));
   const suggestSet = new Set(suggestIds);
-  const shown = pool.filter(a => !selected.has(a.id))
-    .filter(a => !q || a.name.toLowerCase().includes(q) || (a.position || "").toLowerCase() === q)
+  const shown = pool.filter(a => !takenAnywhere.has(a.id))
+    .filter(a => !q || a.name.toLowerCase().includes(q) || (a.position || "").toLowerCase() === q || (multi && label(M.ownerOf[a.id]).toLowerCase().includes(q)))
     .sort((a, b) => (suggestSet.has(b.id) - suggestSet.has(a.id)) || (b.value - a.value));
   const grid = el("div", { class: "tc-grid" });
   if (!shown.length) grid.appendChild(el("div", { class: "empty" }, q ? "No matches." : "Nothing left to add."));
   shown.forEach(a => {
     const isS = suggestSet.has(a.id);
-    const c = el("button", { class: "tc-card" + (isS ? " suggest" : ""), type: "button", title: a.name + " · " + tcFmt(a.value) },
+    const c = el("button", { class: "tc-card" + (isS ? " suggest" : ""), type: "button", title: a.name + " · " + tcFmt(a.value) + (multi ? " · " + label(M.ownerOf[a.id]) : "") },
       isS ? el("span", { class: "tc-badge" }, "Balance") : null,
+      multi ? el("span", { class: "tc-owner" }, tcInitials(label(M.ownerOf[a.id]))) : null,
       tcAvatar(a, true),
       el("span", { class: "pos-chip " + (a.kind === "pick" ? "pos-other" : positionClass(a.position)) }, a.kind === "pick" ? "PK" : a.position),
       el("span", { class: "tc-card-name" }, tcShort(a.name)),
-      el("span", { class: "tc-card-val" }, tcFmt(a.value)));
-    c.addEventListener("click", () => { selected.add(a.id); render(); });
+      el("span", { class: "tc-card-val" }, tcFmt(a.value), tcTrendChip(a.trend, true)));
+    c.addEventListener("click", () => { t.recv[uid].add(a.id); render(); });
     grid.appendChild(c);
   });
   card.appendChild(grid);
+  return card;
+}
+
+// Suggested deals for your team, each loadable into the calculator.
+function tcFinderCard(M, t, label) {
+  const me = t.teams[0];
+  const card = el("div", { class: "card tc-finder" });
+  card.appendChild(el("h2", {}, "Trades to propose ",
+    el("span", { class: "section-sub" }, "fair by value, and they raise " + label(me) + "'s starting lineup without wrecking the other side's")));
+  const deals = t.finder || [];
+  if (!deals.length) { card.appendChild(el("div", { class: "empty" }, "No fair deals found that improve your lineup with 1–2 pieces a side.")); return card; }
+  const list = el("div", { class: "tc-deals" });
+  deals.forEach(d => {
+    const names = arr => arr.map(a => tcShort(a.name)).join(" + ");
+    const gap = Math.round(d.gap);
+    const row = el("button", { class: "tc-deal", type: "button" },
+      el("div", { class: "tc-deal-main" },
+        el("div", { class: "tc-deal-line" }, el("span", { class: "tc-deal-give" }, "Send " + names(d.give)), " → ",
+          el("span", { class: "tc-deal-get" }, "get " + names(d.get)), el("span", { class: "tc-deal-with" }, " from " + label(d.partnerUid))),
+        el("div", { class: "tc-deal-meta" },
+          el("span", { class: "draft-pill " + (gap <= 5 ? "ta-fair" : "pre") }, gap + "% gap"),
+          el("span", { class: "delta-pos" }, "your starters +" + d.myGain + (d.needFixed ? " · fixes a need" : "")),
+          el("span", { class: d.theirGain < 0 ? "delta-neg" : d.theirGain > 0 ? "delta-pos" : "" }, "theirs " + (d.theirGain >= 0 ? "+" : "") + d.theirGain))),
+      el("span", { class: "tc-deal-load" }, "Load ›"));
+    row.addEventListener("click", () => {
+      t.teams = [me, d.partnerUid];
+      t.recv = { [me]: new Set(d.get.map(a => a.id)), [d.partnerUid]: new Set(d.give.map(a => a.id)) };
+      t.q = { [me]: "", [d.partnerUid]: "" };
+      t.finderOpen = false;
+      render();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    list.appendChild(row);
+  });
+  card.appendChild(list);
+  card.appendChild(el("p", { class: "ta-note" }, "Lineup numbers are league-rank places gained across QB/RB/WR/TE starters. Deals are drawn from each roster's 14 most valuable pieces."));
+  return card;
+}
+
+// League-wide risers and fallers over the last ~4 weekly KTC snapshots.
+function tcMoversCard(M, label) {
+  const card = el("div", { class: "card tc-movers" });
+  card.appendChild(el("h2", {}, "Movers ", el("span", { class: "section-sub" }, "biggest KTC value swings on league rosters, last ~4 weeks")));
+  if (!M.hasHist) {
+    card.appendChild(el("div", { class: "empty" }, state.valuesHistError ? "Value history unavailable: " + state.valuesHistError : "Loading value history…"));
+    return card;
+  }
+  // Only pieces that matter (KTC ≥ 2,500): deep-bench values bounce around near zero.
+  const all = Object.entries(M.byUser).flatMap(([uid, assets]) => assets.filter(a => a.trend && a.ktc >= 2500).map(a => ({ a, uid })));
+  if (!all.length) { card.appendChild(el("div", { class: "empty" }, "Not enough snapshots yet.")); return card; }
+  const risers = all.slice().sort((x, y) => y.a.trend.delta - x.a.trend.delta).slice(0, 6);
+  const fallers = all.slice().sort((x, y) => x.a.trend.delta - y.a.trend.delta).slice(0, 6);
+  const col = (title, items) => el("div", { class: "tc-movers-col" }, el("h3", { class: "ta-h3" }, title),
+    ...items.map(({ a, uid }) => el("div", { class: "tc-mover" }, tcAvatar(a, false),
+      el("div", { class: "tc-row-main" }, el("div", { class: "tc-row-name" }, a.name),
+        el("div", { class: "tc-row-meta" }, el("span", { class: "pos-chip " + (a.kind === "pick" ? "pos-other" : positionClass(a.position)) }, a.kind === "pick" ? "PICK" : a.position), el("span", {}, label(uid)), tcSpark(a.trend))),
+      el("div", { class: "tc-row-val" }, tcTrendChip(a.trend, false)))));
+  card.appendChild(el("div", { class: "tc-movers-grid" }, col("Rising", risers), col("Falling", fallers)));
+  const h = state.valuesHist;
+  card.appendChild(el("p", { class: "ta-note" }, "Snapshots: " + h.total + " weekly, since " + h.first + ". New ones are taken automatically as the site is used."));
   return card;
 }
 
@@ -8388,7 +8748,16 @@ function openLeaguePage() {
 document.getElementById("leagueBtn").addEventListener("click", openLeaguePage);
 
 // Initial bootstrap
+tcApplyHash();   // a #trade= link opens straight into the calculator
 setWorkspace(state.workspace);
+// A trade link pasted into an already-open tab only changes the hash.
+window.addEventListener("hashchange", () => {
+  if (!tcDecode(location.hash)) return;
+  tcApplyHash();
+  setWorkspace("team");
+  rebuildTabsNav();
+  render();
+});
 loadData();
 setInterval(loadData, REFRESH_MS);
 </script>

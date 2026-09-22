@@ -125,8 +125,15 @@ export default async function handler(req, res) {
         position: p.position,
         team: p.team || null,
         averageRank: p.averageRank,
+        posRank: p.averagePositionalRank != null ? p.averagePositionalRank : null,
         isRookie: !!p.isRookie,
       }))
+      .sort((a, b) => a.averageRank - b.averageRank);
+    // Draft-pick assets ranked alongside the players ("'26 1.05", "2027 EARLY 1st",
+    // "'27 3rd"). The trade calculator prices our Sleeper picks off these ranks.
+    const picks = (body.data || [])
+      .filter(p => p.isDraftPick && p.averageRank != null && p.playerName)
+      .map(p => ({ name: p.playerName, averageRank: p.averageRank, pickType: p.pickType || null }))
       .sort((a, b) => a.averageRank - b.averageRank);
     // Implied 0–10000 value scale so we can blend with KTC's value space:
     // #1 → 10000, last → 0, linear in between.
@@ -142,6 +149,7 @@ export default async function handler(req, res) {
     const payload = {
       players: rookies,
       allPlayers,
+      picks,
       subscribed: !!body.subscribed,
       year: body.year,
       updated: Date.now(),

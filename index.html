@@ -7597,8 +7597,13 @@ function renderStandingsByWeek(main, season, teams, played) {
       cum[e.roster_id].maxPf += score[e.roster_id].max;
     });
     const snap = teams.map(t => {
-      const c = cum[t.rid], g = c.w + c.l + c.t;
-      return { ...t, w: c.w, l: c.l, t: c.t, g, pct: g ? (c.w + 0.5 * c.t) / g : 0, pf: c.pf, maxPf: c.maxPf };
+      const c = cum[t.rid];
+      // Projected weeks carry fractional expected wins; rank on the rounded
+      // record that's displayed, so equal records fall to the PF tiebreak.
+      const g = Math.round(c.w + c.l + c.t);
+      const w = proj ? Math.round(c.w + 0.5 * c.t) : c.w;
+      const l = proj ? g - w : c.l, tie = proj ? 0 : c.t;
+      return { ...t, w, l, t: tie, g, pct: g ? (w + 0.5 * tie) / g : 0, pf: c.pf, maxPf: c.maxPf };
     });
     const { seeds, order } = seedStandings(snap, season);
     cols.push({ wk, proj, seeds, places: seeds.concat(order.slice().reverse()) });
@@ -7608,11 +7613,7 @@ function renderStandingsByWeek(main, season, teams, played) {
   const mine = myTeamName();
   const n = cols[0].places.length;
   const nSeeds = cols[0].seeds.length;
-  // Projected weeks carry fractional expected wins; round so W + L = games.
-  const rec = t => {
-    const w = Math.round(t.w + 0.5 * t.t), g = Math.round(t.w + t.l + t.t);
-    return t.t && Number.isInteger(t.w) ? t.w + "-" + t.l + "-" + t.t : w + "-" + (g - w);
-  };
+  const rec = t => t.w + "-" + t.l + (t.t ? "-" + t.t : "");
   const table = el("table", { class: "hist-table standings-week" });
   table.appendChild(el("thead", {}, el("tr", {},
     el("th", {}, "Place"),

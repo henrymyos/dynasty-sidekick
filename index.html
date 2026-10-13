@@ -7349,6 +7349,168 @@ function renderScheduleLuck(main) {
       "Luck = actual − expected over all regular-season weeks; positive = won more than your scoring deserved.")));
 }
 
+// Current-season standings: who's in the playoffs right now and the live
+// rookie-draft order for everyone else. Home-league rules (verified against
+// the Dynasty Leaderboards sheet and the 2025 bracket / 2026 draft slots):
+//   seeds 1-3 = division winners, 4-5 = best remaining records, 6 = most
+//   points among the rest; non-playoff teams draft in ascending Max PF
+//   (Sleeper potential points), so the lowest Max PF picks 1.01.
+// Other leagues: division winners (if any), then record, and reverse-standings
+// draft order.
+function renderStandings() {
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  ensureSleeperLoaded();
+  if (state.sleeperLoading || (!state.sleeper && !state.sleeperError)) {
+    main.appendChild(el("div", { class: "empty" }, "Loading from Sleeper…"));
+    return;
+  }
+  if (state.sleeperError) {
+    main.appendChild(el("div", { class: "empty" }, "Sleeper error: " + state.sleeperError));
+    return;
+  }
+  const season = state.sleeper.seasons[state.sleeper.seasons.length - 1];
+  const teams = season.rosters.map(r => {
+    const w = r.wins || 0, l = r.losses || 0, t = r.ties || 0;
+    const g = w + l + t;
+    return {
+      rid: r.roster_id,
+      name: canonicalUserName(rosterToOwner(season, r.roster_id)),
+      w, l, t, g,
+      pct: g ? (w + 0.5 * t) / g : 0,
+      pf: r.fpts || 0,
+      maxPf: r.ppts || 0,
+      div: r.division || null,
+    };
+  });
+  const played = Math.max(0, ...teams.map(t => t.g));
+  if (!played) {
+    main.appendChild(el("div", { class: "empty" }, "Standings appear once the " + season.season + " season has games."));
+    return;
+  }
+
+  const byRecord = (a, b) => (b.pct - a.pct) || (b.pf - a.pf);
+  const pt = season.playoff_teams || Math.floor(teams.length / 2);
+  const divCount = season.divisions || 0;
+  const pointsWildcard = IS_DEFAULT_LEAGUE;
+
+  // Division winners first (best record, PF tiebreak), seeded among themselves.
+  const seeds = [];
+  if (divCount > 1) {
+    for (let d = 1; d <= divCount; d++) {
+      const lead = teams.filter(t => t.div === d).sort(byRecord)[0];
+      if (lead) seeds.push({ ...lead, how: "Div winner", howClass: "done" });
+    }
+    seeds.sort(byRecord);
+  }
+  const taken = () => new Set(seeds.map(s => s.rid));
+  const recordSlots = pt - seeds.length - (pointsWildcard ? 1 : 0);
+  teams.filter(t => !taken().has(t.rid)).sort(byRecord).slice(0, Math.max(0, recordSlots))
+    .forEach(t => seeds.push({ ...t, how: "Record WC", howClass: "pre" }));
+  if (pointsWildcard) {
+    const top = teams.filter(t => !taken().has(t.rid)).sort((a, b) => b.pf - a.pf)[0];
+    if (top) seeds.push({ ...top, how: "Points WC", howClass: "ta-fair" });
+  }
+  const inSet = taken();
+  const out = teams.filter(t => !inSet.has(t.rid));
+  // Draft order for non-playoff teams: pick 1 = lowest Max PF (home league),
+  // else worst record then fewest points.
+  const order = pointsWildcard
+    ? out.slice().sort((a, b) => a.maxPf - b.maxPf)
+    : out.slice().sort((a, b) => (a.pct - b.pct) || (a.pf - b.pf));
+
+  // Next year's 1st-round ownership (picks can be traded).
+  const nextYear = String(parseInt(season.season, 10) + 1);
+  const ownerOf = {};
+  (state.sleeper.traded_picks || [])
+    .filter(t => String(t.season) === nextYear && t.round === 1)
+    .forEach(t => { ownerOf[t.roster_id] = t.owner_id; });
+  const nameByRid = {};
+  teams.forEach(t => { nameByRid[t.rid] = t.name; });
+  const mine = myTeamName();
+  const rec = t => t.w + "-" + t.l + (t.t ? "-" + t.t : "");
+  const nameCell = t => el("td", { style: t.name === mine ? "font-weight:700" : "" }, t.name);
+  const divName = d => (season.division_names && season.division_names[d]) || ("Division " + d);
+
+  // ----- Playoff picture -----
+  const firstOut = out.slice().sort(byRecord)[0];
+  const ptsBubble = pointsWildcard ? out.slice().sort((a, b) => b.pf - a.pf)[0] : null;
+  const poTable = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", { class: "num tight" }, "Seed"),
+      el("th", {}, "Manager"),
+      el("th", { class: "num" }, "Record"),
+      el("th", { class: "num" }, "PF"),
+      divCount > 1 ? el("th", {}, "Division") : null,
+      el("th", {}, "Spot"),
+    )));
+  const poBody = el("tbody", {});
+  seeds.forEach((t, i) => poBody.appendChild(el("tr", {},
+    el("td", { class: "num tight" }, String(i + 1)),
+    nameCell(t),
+    el("td", { class: "num" }, rec(t)),
+    el("td", { class: "num" }, t.pf.toFixed(2)),
+    divCount > 1 ? el("td", { style: "color:var(--muted)" }, t.div ? divName(t.div) : "—") : null,
+    el("td", {}, el("span", { class: "draft-pill " + t.howClass, style: "margin-left:0" }, t.how)),
+  )));
+  poTable.appendChild(poBody);
+  const bubbleBits = [];
+  if (firstOut) bubbleBits.push("First out on record: " + firstOut.name + " (" + rec(firstOut) + ").");
+  if (ptsBubble && seeds.length) {
+    const wc = seeds[seeds.length - 1];
+    bubbleBits.push("Points WC lead: " + wc.name + " by " + (wc.pf - ptsBubble.pf).toFixed(2) + " over " + ptsBubble.name + ".");
+  }
+  main.appendChild(el("div", { class: "card" },
+    el("h2", {}, "Playoff Picture"),
+    el("div", { style: "overflow-x:auto" }, poTable),
+    el("div", { class: "hist-note" },
+      season.season + " regular season through week " + played + ". " +
+      (pointsWildcard
+        ? "Seeds 1-" + Math.min(divCount, pt) + " are division winners, the next " + Math.max(0, recordSlots) +
+          " go by record, and the last spot goes to the most points among everyone else. Ties break on PF. "
+        : "Division winners first, then record; ties break on PF. ") +
+      bubbleBits.join(" "))));
+
+  // ----- Draft order (non-playoff teams) -----
+  const dTable = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", { class: "num tight" }, "Pick"),
+      el("th", {}, "Manager"),
+      el("th", { class: "num" }, "Record"),
+      el("th", { class: "num" }, "PF"),
+      el("th", { class: "num" }, "Max PF"),
+      pointsWildcard ? el("th", { class: "num" }, "Gap") : null,
+      el("th", {}, "Pick owner"),
+    )));
+  const dBody = el("tbody", {});
+  order.forEach((t, i) => {
+    const ownerRid = ownerOf[t.rid];
+    const traded = ownerRid != null && ownerRid !== t.rid;
+    const next = order[i + 1];
+    dBody.appendChild(el("tr", {},
+      el("td", { class: "num tight" }, "1." + String(i + 1).padStart(2, "0")),
+      nameCell(t),
+      el("td", { class: "num" }, rec(t)),
+      el("td", { class: "num" }, t.pf.toFixed(2)),
+      el("td", { class: "num", style: pointsWildcard ? "font-weight:600" : "" }, t.maxPf ? t.maxPf.toFixed(2) : "—"),
+      pointsWildcard ? el("td", { class: "num", style: "color:var(--muted)" },
+        next ? (next.maxPf - t.maxPf).toFixed(2) : "") : null,
+      el("td", { style: traded ? "" : "color:var(--muted)" },
+        traded ? (nameByRid[ownerRid] || "—") : "Own"),
+    ));
+  });
+  dTable.appendChild(dBody);
+  main.appendChild(el("div", { class: "card", style: "margin-top:16px" },
+    el("h2", {}, nextYear + " Draft Order (non-playoff teams)"),
+    el("div", { style: "overflow-x:auto" }, dTable),
+    el("div", { class: "hist-note" },
+      pointsWildcard
+        ? "Non-playoff teams draft in order of Max PF (Sleeper's potential points: your best possible lineup each week), lowest first, so tanking doesn't help. " +
+          "Gap = Max PF cushion to the next pick; outscore that and you slide back a slot. " +
+          "Picks " + (order.length + 1) + "-" + teams.length + " are set by playoff finish."
+        : "Reverse standings among non-playoff teams; picks " + (order.length + 1) + "-" + teams.length + " are set by playoff finish.")));
+}
+
 function renderHistory() {
   const main = document.getElementById("main");
   main.innerHTML = "";
@@ -7640,6 +7802,7 @@ function ktcNorm(s) {
 const WORKSPACE_TABS = {
   drafts: [
     { view: "overview", label: "Overview" },
+    { view: "standings", label: "Standings" },
     { view: "leaderboard", label: "Drafters" },
     { view: "stats", label: "Stats" },
     { view: "trades", label: "Trades" },
@@ -8446,6 +8609,7 @@ function render() {
     case "stats": renderStats(); break;
     case "trades": renderTrades(); break;
     case "history": renderHistory(); break;
+    case "standings": renderStandings(); break;
     case "insights": renderInsights(); break;
     case "overview": renderOverview(); break;
     // Team workspace

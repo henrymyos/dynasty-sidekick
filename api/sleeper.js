@@ -126,6 +126,12 @@ export default async function handler(req, res) {
       roster_positions: sd.league.roster_positions || [],
       playoff_teams: (sd.league.settings && sd.league.settings.playoff_teams) || null,
       playoff_week_start: (sd.league.settings && sd.league.settings.playoff_week_start) || null,
+      // Division count + names (league metadata division_1, division_2, …) for
+      // the Standings tab's division-winner seeding.
+      divisions: (sd.league.settings && sd.league.settings.divisions) || 0,
+      division_names: Object.fromEntries(Object.entries(sd.league.metadata || {})
+        .filter(([k]) => /^division_\d+$/.test(k))
+        .map(([k, v]) => [k.slice(9), v])),
       // TE reception bonus → which KTC value scale (tep/tepp/teppp) applies.
       bonus_rec_te: (sd.league.scoring_settings && sd.league.scoring_settings.bonus_rec_te) || 0,
       winners_bracket: (sd.winnersBracket || []).map(m => ({
@@ -145,6 +151,10 @@ export default async function handler(req, res) {
         losses: r.settings && r.settings.losses,
         ties: r.settings && r.settings.ties,
         fpts: r.settings && (r.settings.fpts || 0) + ((r.settings.fpts_decimal || 0) / 100),
+        // Max potential points (best possible lineup each week) — the home
+        // league orders non-playoff teams' draft slots by this.
+        ppts: r.settings && (r.settings.ppts || 0) + ((r.settings.ppts_decimal || 0) / 100),
+        division: (r.settings && r.settings.division) || null,
       })),
       drafts: sd.drafts.map(d => ({
         draft_id: d.draft_id,

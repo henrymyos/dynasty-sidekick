@@ -78,6 +78,36 @@ async function fetchPlayers() {
   return playersCache;
 }
 
+// Best possible lineup score for one team-week (Sleeper's "max points" /
+// potential points): fill the most restrictive slots first with the
+// highest-scoring eligible player. Matches Sleeper's season ppts exactly for
+// the default league's QB/RB/RB/WR/WR/TE/FLEX/FLEX/SF shape.
+const SLOT_ELIGIBLE = {
+  QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], K: ["K"], DEF: ["DEF"],
+  FLEX: ["RB", "WR", "TE"], WRRB_FLEX: ["WR", "RB"], REC_FLEX: ["WR", "TE"],
+  SUPER_FLEX: ["QB", "RB", "WR", "TE"],
+  IDP_FLEX: ["DL", "LB", "DB"], DL: ["DL"], LB: ["LB"], DB: ["DB"],
+};
+function maxLineupPoints(playersPoints, rosterPositions, players) {
+  if (!playersPoints) return null;
+  const slots = (rosterPositions || [])
+    .filter(s => SLOT_ELIGIBLE[s])
+    .sort((a, b) => SLOT_ELIGIBLE[a].length - SLOT_ELIGIBLE[b].length);
+  if (!slots.length) return null;
+  const cands = Object.entries(playersPoints).map(([pid, pts]) => {
+    const p = players[pid] || {};
+    return { pts: pts || 0, pos: p.fantasy_positions || (p.position ? [p.position] : []) };
+  }).sort((a, b) => b.pts - a.pts);
+  const used = new Set();
+  let total = 0;
+  slots.forEach(slot => {
+    const ok = SLOT_ELIGIBLE[slot];
+    const i = cands.findIndex((c, idx) => !used.has(idx) && c.pos.some(x => ok.includes(x)));
+    if (i >= 0) { used.add(i); total += cands[i].pts; }
+  });
+  return Math.round(total * 100) / 100;
+}
+
 export default async function handler(req, res) {
   try {
     const leagueId = resolveLeagueId(req);
@@ -192,7 +222,12 @@ export default async function handler(req, res) {
         })),
       })),
       matchups: (sd.matchups || []).map(week =>
-        (week || []).map(m => ({ roster_id: m.roster_id, matchup_id: m.matchup_id, points: m.points }))),
+        (week || []).map(m => ({
+          roster_id: m.roster_id, matchup_id: m.matchup_id, points: m.points,
+          // Weekly potential points, so the Standings history can rank
+          // non-playoff teams by Max PF as of any past week.
+          max_points: maxLineupPoints(m.players_points, sd.league.roster_positions, players),
+        }))),
     }));
 
     res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=86400");

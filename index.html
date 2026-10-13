@@ -305,6 +305,10 @@
   .hist-table tr.hist-summary-top td, .hist-table tr.hist-summary-top th { border-top: 2px solid var(--border); }
   .hist-table th.metric-label { text-align: left; }
   .hist-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .standings-week td { text-align: left; line-height: 1.3; }
+  .standings-week td .sw-sub { color: var(--muted); font-size: 11px; }
+  .standings-week th.proj, .standings-week td.proj { font-style: italic; opacity: 0.7; }
+  .standings-week td.sw-me { color: var(--accent); font-weight: 600; }
   .hist-table td.h2h-w, .hist-table tr:hover td.h2h-w { background: rgba(46, 160, 67, 0.13); color: #3fb950; }
   .hist-table td.h2h-l, .hist-table tr:hover td.h2h-l { background: rgba(248, 81, 73, 0.10); color: #f85149; }
   .hist-table td.diag, .hist-table tr:hover td.diag { color: var(--muted); }
@@ -7107,48 +7111,10 @@ function sampleNormal(mean, sd) {
   return mean + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-// Playoff odds: Monte-Carlo the remaining regular-season schedule for the
-// current season, using each team's scoring mean/variance so far. Renders
-// nothing outside an in-progress regular season (no games left to simulate).
-function renderPlayoffOdds(main) {
-  if (!state.sleeper) return;
-  const season = state.sleeper.seasons[state.sleeper.seasons.length - 1];
-  const weeks = season.matchups || [];
-  const pws = season.playoff_week_start;
-  if (!weeks.length || !pws) return;
-  const lastReg = pws - 1;
-  const teams = season.rosters.map(r => ({
-    rid: r.roster_id,
-    name: canonicalOwnerName(userDisplay(rosterToOwner(season, r.roster_id))),
-    rec: (r.wins || 0) + "-" + (r.losses || 0) + (r.ties ? "-" + r.ties : ""),
-    wins0: (r.wins || 0) + 0.5 * (r.ties || 0),
-    losses0: r.losses || 0,
-    pts0: r.fpts || 0,
-    scores: [],
-    remGames: 0,
-  }));
-  const byRid = {};
-  teams.forEach(t => byRid[t.rid] = t);
-  const remaining = [];
-  for (let w = 0; w < lastReg && w < weeks.length; w++) {
-    const entries = (weeks[w] || []).filter(e => e && e.matchup_id != null);
-    if (!entries.length) continue;
-    const complete = entries.every(e => typeof e.points === "number" && e.points > 0);
-    const byMatch = {};
-    entries.forEach(e => { (byMatch[e.matchup_id] || (byMatch[e.matchup_id] = [])).push(e); });
-    if (complete) {
-      entries.forEach(e => { const t = byRid[e.roster_id]; if (t) t.scores.push(e.points); });
-    } else {
-      Object.values(byMatch).forEach(p => {
-        if (p.length !== 2) return;
-        remaining.push([p[0].roster_id, p[1].roster_id, w + 1]);
-        if (byRid[p[0].roster_id]) byRid[p[0].roster_id].remGames++;
-        if (byRid[p[1].roster_id]) byRid[p[1].roster_id].remGames++;
-      });
-    }
-  }
-  if (!remaining.length) return;  // season fully played — nothing to project
-
+// Per-team, per-week projected points for a season (shared by Playoff Odds
+// and the Standings week-by-week projections). Returns meanFor(rid, week).
+function weeklyProjectionModel(season) {
+  const teams = season.rosters.map(r => ({ rid: r.roster_id }));
   // Per-team projection for each specific week = its OPTIMAL-LINEUP projected
   // points from Sleeper's player projections for that week. Bye weeks fall out
   // naturally: a player with no projection that week contributes 0, so the
@@ -7210,6 +7176,52 @@ function renderPlayoffOdds(main) {
     }
     return constPrior[rid] || 110;
   };
+  return { meanFor, constPrior, sp };
+}
+
+// Playoff odds: Monte-Carlo the remaining regular-season schedule for the
+// current season, using each team's scoring mean/variance so far. Renders
+// nothing outside an in-progress regular season (no games left to simulate).
+function renderPlayoffOdds(main) {
+  if (!state.sleeper) return;
+  const season = state.sleeper.seasons[state.sleeper.seasons.length - 1];
+  const weeks = season.matchups || [];
+  const pws = season.playoff_week_start;
+  if (!weeks.length || !pws) return;
+  const lastReg = pws - 1;
+  const teams = season.rosters.map(r => ({
+    rid: r.roster_id,
+    name: canonicalOwnerName(userDisplay(rosterToOwner(season, r.roster_id))),
+    rec: (r.wins || 0) + "-" + (r.losses || 0) + (r.ties ? "-" + r.ties : ""),
+    wins0: (r.wins || 0) + 0.5 * (r.ties || 0),
+    losses0: r.losses || 0,
+    pts0: r.fpts || 0,
+    scores: [],
+    remGames: 0,
+  }));
+  const byRid = {};
+  teams.forEach(t => byRid[t.rid] = t);
+  const remaining = [];
+  for (let w = 0; w < lastReg && w < weeks.length; w++) {
+    const entries = (weeks[w] || []).filter(e => e && e.matchup_id != null);
+    if (!entries.length) continue;
+    const complete = entries.every(e => typeof e.points === "number" && e.points > 0);
+    const byMatch = {};
+    entries.forEach(e => { (byMatch[e.matchup_id] || (byMatch[e.matchup_id] = [])).push(e); });
+    if (complete) {
+      entries.forEach(e => { const t = byRid[e.roster_id]; if (t) t.scores.push(e.points); });
+    } else {
+      Object.values(byMatch).forEach(p => {
+        if (p.length !== 2) return;
+        remaining.push([p[0].roster_id, p[1].roster_id, w + 1]);
+        if (byRid[p[0].roster_id]) byRid[p[0].roster_id].remGames++;
+        if (byRid[p[1].roster_id]) byRid[p[1].roster_id].remGames++;
+      });
+    }
+  }
+  if (!remaining.length) return;  // season fully played — nothing to project
+
+  const { meanFor, constPrior, sp } = weeklyProjectionModel(season);
   const sdFor = mean => Math.max(18, 0.22 * mean);
 
   const pt = season.playoff_teams || Math.floor(teams.length / 2);
@@ -7349,6 +7361,49 @@ function renderScheduleLuck(main) {
       "Luck = actual − expected over all regular-season weeks; positive = won more than your scoring deserved.")));
 }
 
+const standingsByRecord = (a, b) => (b.pct - a.pct) || (b.pf - a.pf);
+const standingsByPoints = (a, b) => b.pf - a.pf;
+
+// Seed a standings snapshot. teams: [{ rid, pct, pf, maxPf, div }].
+// Returns playoff seeds (with how each got in) and non-playoff draft order.
+function seedStandings(teams, season) {
+  const byRecord = standingsByRecord, byPoints = standingsByPoints;
+  const pt = season.playoff_teams || Math.floor(teams.length / 2);
+  const homeRules = IS_DEFAULT_LEAGUE;
+  const divCount = homeRules ? 0 : (season.divisions || 0);
+
+  const seeds = [];
+  const taken = () => new Set(seeds.map(s => s.rid));
+  if (homeRules) {
+    // Alternate: odd seeds = best record left, even seeds = most points left.
+    for (let i = 0; i < pt; i++) {
+      const onRecord = i % 2 === 0;
+      const pick = teams.filter(t => !taken().has(t.rid)).sort(onRecord ? byRecord : byPoints)[0];
+      if (!pick) break;
+      seeds.push({ ...pick, how: onRecord ? "Record" : "Points", howClass: onRecord ? "pre" : "ta-fair" });
+    }
+  } else if (divCount > 1) {
+    // Division winners first (best record, PF tiebreak), seeded among themselves.
+    for (let d = 1; d <= divCount; d++) {
+      const lead = teams.filter(t => t.div === d).sort(byRecord)[0];
+      if (lead) seeds.push({ ...lead, how: "Div winner", howClass: "done" });
+    }
+    seeds.sort(byRecord);
+  }
+  if (!homeRules) {
+    teams.filter(t => !taken().has(t.rid)).sort(byRecord).slice(0, Math.max(0, pt - seeds.length))
+      .forEach(t => seeds.push({ ...t, how: "Record", howClass: "pre" }));
+  }
+  const inSet = taken();
+  const out = teams.filter(t => !inSet.has(t.rid));
+  // Draft order for non-playoff teams: pick 1 = lowest Max PF (home league),
+  // else worst record then fewest points.
+  const order = homeRules
+    ? out.slice().sort((a, b) => a.maxPf - b.maxPf)
+    : out.slice().sort((a, b) => (a.pct - b.pct) || (a.pf - b.pf));
+  return { seeds, out, order, homeRules, divCount };
+}
+
 // Current-season standings: who's in the playoffs right now and the live
 // rookie-draft order for everyone else. Home-league rules (matches the
 // Dynasty Leaderboards sheet): seeds alternate best record (PF tiebreak) /
@@ -7389,41 +7444,8 @@ function renderStandings() {
     return;
   }
 
-  const byRecord = (a, b) => (b.pct - a.pct) || (b.pf - a.pf);
-  const pt = season.playoff_teams || Math.floor(teams.length / 2);
-  const homeRules = IS_DEFAULT_LEAGUE;
-  const divCount = homeRules ? 0 : (season.divisions || 0);
-  const byPoints = (a, b) => b.pf - a.pf;
-
-  const seeds = [];
-  const taken = () => new Set(seeds.map(s => s.rid));
-  if (homeRules) {
-    // Alternate: odd seeds = best record left, even seeds = most points left.
-    for (let i = 0; i < pt; i++) {
-      const onRecord = i % 2 === 0;
-      const pick = teams.filter(t => !taken().has(t.rid)).sort(onRecord ? byRecord : byPoints)[0];
-      if (!pick) break;
-      seeds.push({ ...pick, how: onRecord ? "Record" : "Points", howClass: onRecord ? "pre" : "ta-fair" });
-    }
-  } else if (divCount > 1) {
-    // Division winners first (best record, PF tiebreak), seeded among themselves.
-    for (let d = 1; d <= divCount; d++) {
-      const lead = teams.filter(t => t.div === d).sort(byRecord)[0];
-      if (lead) seeds.push({ ...lead, how: "Div winner", howClass: "done" });
-    }
-    seeds.sort(byRecord);
-  }
-  if (!homeRules) {
-    teams.filter(t => !taken().has(t.rid)).sort(byRecord).slice(0, Math.max(0, pt - seeds.length))
-      .forEach(t => seeds.push({ ...t, how: "Record", howClass: "pre" }));
-  }
-  const inSet = taken();
-  const out = teams.filter(t => !inSet.has(t.rid));
-  // Draft order for non-playoff teams: pick 1 = lowest Max PF (home league),
-  // else worst record then fewest points.
-  const order = homeRules
-    ? out.slice().sort((a, b) => a.maxPf - b.maxPf)
-    : out.slice().sort((a, b) => (a.pct - b.pct) || (a.pf - b.pf));
+  const { seeds, out, order, homeRules, divCount } = seedStandings(teams, season);
+  const byRecord = standingsByRecord, byPoints = standingsByPoints;
 
   // Next year's 1st-round ownership (picks can be traded).
   const nextYear = String(parseInt(season.season, 10) + 1);
@@ -7514,6 +7536,127 @@ function renderStandings() {
           "Gap = Max PF cushion to the next pick; outscore that and you slide back a slot. " +
           "Picks " + (order.length + 1) + "-" + teams.length + " are set by playoff finish."
         : "Reverse standings among non-playoff teams; picks " + (order.length + 1) + "-" + teams.length + " are set by playoff finish.")));
+
+  renderStandingsByWeek(main, season, teams, played);
+}
+
+// Week-by-week standings in the league sheet's layout: rows = places (playoff
+// seeds, then non-playoff teams by Max PF, highest first, so the 1.01 pick is
+// the bottom row), columns = regular-season weeks. Played weeks use actual
+// results; later weeks are projected from each team's optimal-lineup
+// projection for that week, crediting expected wins (each matchup's win
+// probability under the same scoring spread Playoff Odds simulates).
+function normCdf(z) {
+  // Abramowitz-Stegun erf approximation; plenty for win probabilities.
+  const t = 1 / (1 + 0.3275911 * Math.abs(z) / Math.SQRT2);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z / 2);
+  return z >= 0 ? (1 + y) / 2 : (1 - y) / 2;
+}
+
+function renderStandingsByWeek(main, season, teams, played) {
+  const weeks = season.matchups || [];
+  const lastReg = (season.playoff_week_start || 15) - 1;
+  if (!weeks.length || lastReg < 1) return;
+  ensureSeasonProjLoaded();
+  ensureLineupDataLoaded();
+  const { meanFor, sp } = weeklyProjectionModel(season);
+
+  const cum = {};
+  teams.forEach(t => { cum[t.rid] = { w: 0, l: 0, t: 0, pf: 0, maxPf: 0 }; });
+  const cols = [];
+  for (let wk = 1; wk <= lastReg; wk++) {
+    const entries = (weeks[wk - 1] || []).filter(e => e && e.matchup_id != null && cum[e.roster_id]);
+    if (!entries.length) break;  // schedule not published this far
+    const proj = wk > played;
+    const score = {};
+    const sd = mean => Math.max(18, 0.22 * mean);
+    entries.forEach(e => {
+      if (proj) {
+        const m = meanFor(e.roster_id, wk);
+        score[e.roster_id] = { pts: m, max: m };
+      } else {
+        score[e.roster_id] = { pts: e.points || 0, max: e.max_points != null ? e.max_points : (e.points || 0) };
+      }
+    });
+    const byMatch = {};
+    entries.forEach(e => { (byMatch[e.matchup_id] || (byMatch[e.matchup_id] = [])).push(e.roster_id); });
+    Object.values(byMatch).forEach(pair => {
+      if (pair.length !== 2) return;
+      const [a, b] = pair;
+      const sa = score[a].pts, sb = score[b].pts;
+      if (proj) {
+        const pa = normCdf((sa - sb) / Math.sqrt(sd(sa) ** 2 + sd(sb) ** 2));
+        cum[a].w += pa; cum[a].l += 1 - pa;
+        cum[b].w += 1 - pa; cum[b].l += pa;
+      } else if (sa > sb) { cum[a].w++; cum[b].l++; }
+      else if (sb > sa) { cum[b].w++; cum[a].l++; }
+      else { cum[a].t++; cum[b].t++; }
+    });
+    entries.forEach(e => {
+      cum[e.roster_id].pf += score[e.roster_id].pts;
+      cum[e.roster_id].maxPf += score[e.roster_id].max;
+    });
+    const snap = teams.map(t => {
+      const c = cum[t.rid], g = c.w + c.l + c.t;
+      return { ...t, w: c.w, l: c.l, t: c.t, g, pct: g ? (c.w + 0.5 * c.t) / g : 0, pf: c.pf, maxPf: c.maxPf };
+    });
+    const { seeds, order } = seedStandings(snap, season);
+    cols.push({ wk, proj, seeds, places: seeds.concat(order.slice().reverse()) });
+  }
+  if (!cols.length) return;
+
+  const mine = myTeamName();
+  const n = cols[0].places.length;
+  const nSeeds = cols[0].seeds.length;
+  // Projected weeks carry fractional expected wins; round so W + L = games.
+  const rec = t => {
+    const w = Math.round(t.w + 0.5 * t.t), g = Math.round(t.w + t.l + t.t);
+    return t.t && Number.isInteger(t.w) ? t.w + "-" + t.l + "-" + t.t : w + "-" + (g - w);
+  };
+  const table = el("table", { class: "hist-table standings-week" });
+  table.appendChild(el("thead", {}, el("tr", {},
+    el("th", {}, "Place"),
+    ...cols.map(c => el("th", { class: c.proj ? "proj" : "", "data-wk": String(c.wk) }, "W" + c.wk + (c.proj ? " proj" : ""))),
+  )));
+  const tb = el("tbody", {});
+  for (let p = 0; p < n; p++) {
+    const isSeed = p < nSeeds;
+    const label = isSeed ? String(p + 1) : (p + 1) + " · 1." + String(n - p).padStart(2, "0");
+    tb.appendChild(el("tr", { class: p === nSeeds ? "hist-summary-top" : "" },
+      el("td", {}, label),
+      ...cols.map(c => {
+        const t = c.places[p];
+        if (!t) return el("td", {}, "");
+        const cls = [c.proj ? "proj" : "", t.name === mine ? "sw-me" : ""].join(" ").trim();
+        return el("td", { class: cls },
+          el("div", {}, t.name),
+          el("div", { class: "sw-sub" }, (isSeed ? t.pf : t.maxPf).toFixed(2) + " · " + rec(t)));
+      }),
+    ));
+  }
+  table.appendChild(tb);
+  const wrap = el("div", { style: "overflow-x:auto" }, table);
+  const lastPlayed = Math.min(played, cols[cols.length - 1].wk);
+  const projFrom = cols.find(c => c.proj);
+  main.appendChild(el("div", { class: "card", style: "margin-top:16px" },
+    el("h2", {}, "Week by Week"),
+    wrap,
+    el("div", { class: "hist-note" },
+      "Same layout as the league sheet. Places 1-" + nSeeds + " show PF and record; places " + (nSeeds + 1) + "-" + n +
+      " show Max PF and record, with the draft pick each would get. " +
+      (projFrom
+        ? "Weeks 1-" + lastPlayed + " are final. W" + projFrom.wk + "-W" + cols[cols.length - 1].wk + " are projected: " +
+          (sp
+            ? "each team scores its optimal-lineup projection from Sleeper's player projections for that week (byes count), "
+            : "weekly points are estimated from roster strength until projections load; ") +
+          "records add expected wins from each matchup's win probability (rounded for display), and the projection is added to both PF and Max PF."
+        : "All regular-season weeks are final."))));
+  // Open scrolled to the latest played week so the projections are in view.
+  requestAnimationFrame(() => {
+    const th = table.querySelector('th[data-wk="' + lastPlayed + '"]');
+    const first = table.querySelector("th");
+    if (th && first) wrap.scrollLeft = Math.max(0, th.offsetLeft - first.offsetWidth - 4);
+  });
 }
 
 function renderHistory() {

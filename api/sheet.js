@@ -18,7 +18,8 @@ export default async function handler(req, res) {
     const r = await fetch(url);
     if (!r.ok) {
       const text = await r.text();
-      res.status(r.status).json({ error: "Sheets API error", detail: text });
+      console.error("Sheets API error", r.status, text);
+      res.status(r.status).json({ error: "Sheets API error (HTTP " + r.status + ")" });
       return;
     }
     const data = await r.json();

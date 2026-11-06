@@ -243,6 +243,7 @@ export default async function handler(req, res) {
     }));
     res.json({ seasons: slim, players: referenced, traded_picks: slimTradedPicks });
   } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
+    console.error(e);
+    res.status(500).json({ error: e.message });
   }
 }

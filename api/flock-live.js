@@ -51,7 +51,8 @@ async function loginAndMintToken() {
   });
   if (!r.ok) {
     const text = await r.text();
-    throw new Error("Flock /auth/login " + r.status + ": " + text.slice(0, 200));
+    console.error("Flock /auth/login", r.status, text.slice(0, 200));
+    throw new Error("Flock /auth/login HTTP " + r.status);
   }
   const data = await r.json();
   const token = data && data.accessToken;

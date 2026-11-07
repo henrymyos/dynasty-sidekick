@@ -88,7 +88,7 @@ const SLOT_ELIGIBLE = {
   SUPER_FLEX: ["QB", "RB", "WR", "TE"],
   IDP_FLEX: ["DL", "LB", "DB"], DL: ["DL"], LB: ["LB"], DB: ["DB"],
 };
-function maxLineupPoints(playersPoints, rosterPositions, players) {
+export function maxLineupPoints(playersPoints, rosterPositions, players) {
   if (!playersPoints) return null;
   const slots = (rosterPositions || [])
     .filter(s => SLOT_ELIGIBLE[s])

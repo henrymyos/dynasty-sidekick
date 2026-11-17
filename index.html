@@ -76,6 +76,8 @@
     font-size: 13px;
     margin-left: auto;
     display: flex;
+    flex-wrap: wrap;
+    min-width: 0;
     align-items: center;
     gap: 8px;
   }
@@ -8950,8 +8952,9 @@ async function loadData() {
   try {
     const res = await fetch("/api/sheet?_=" + Date.now(), { cache: "no-store" });
     if (!res.ok) {
-      const detail = await res.text();
-      throw new Error("API " + res.status + ": " + detail.slice(0, 120));
+      // The API answers {error}; anything else (a host's HTML error page) is noise for the header.
+      const detail = await res.json().then(j => j && j.error, () => "");
+      throw new Error("API " + res.status + (detail ? ": " + String(detail).slice(0, 120) : ""));
     }
     const data = await res.json();
     if (!data.rows) throw new Error("malformed response");

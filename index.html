@@ -7980,10 +7980,13 @@ function rebuildTabsNav() {
     const btn = el("button", {
       "data-view": t.view,
       class: state.view === t.view ? "active" : "",
+      "aria-pressed": String(state.view === t.view),
     }, t.label);
     btn.addEventListener("click", () => {
       state.view = t.view;
       rebuildTabsNav();
+      // the rebuild replaced the clicked button; keep keyboard focus on the tab row
+      nav.querySelector(`[data-view="${t.view}"]`)?.focus();
       render();
     });
     nav.appendChild(btn);
@@ -7993,7 +7996,7 @@ function rebuildTabsNav() {
 function setWorkspace(ws) {
   state.workspace = ws;
   try { localStorage.setItem(LS_WORKSPACE, ws); } catch {}
-  document.querySelectorAll(".ws-btn").forEach(b => b.classList.toggle("active", b.dataset.ws === ws));
+  document.querySelectorAll(".ws-btn").forEach(b => { b.classList.toggle("active", b.dataset.ws === ws); b.setAttribute("aria-pressed", String(b.dataset.ws === ws)); });
 
   // Snap state.view to a tab that exists in the new workspace.
   const tabs = WORKSPACE_TABS[ws] || [];

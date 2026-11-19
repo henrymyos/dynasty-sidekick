@@ -2151,30 +2151,6 @@ function renderLeaderboard() {
   main.appendChild(card);
 }
 
-// Picks ordered chronologically per drafter (year, then by global pick number in the draft)
-function picksSequenceByDrafter(picks) {
-  const groups = {};
-  picks.forEach(p => {
-    if (!p.player || !p.round || !p.pickInRound) return;
-    (groups[p.person] = groups[p.person] || []).push(p);
-  });
-  Object.values(groups).forEach(arr => arr.sort((a, b) => {
-    if (a.year !== b.year) return a.year - b.year;
-    return ((a.round - 1) * 12 + a.pickInRound) - ((b.round - 1) * 12 + b.pickInRound);
-  }));
-  return groups;
-}
-
-// All picks across the league in global draft order
-function picksInDraftOrder(picks) {
-  return picks.slice()
-    .filter(p => p.player && p.round && p.pickInRound)
-    .sort((a, b) => {
-      if (a.year !== b.year) return a.year - b.year;
-      return ((a.round - 1) * 12 + a.pickInRound) - ((b.round - 1) * 12 + b.pickInRound);
-    });
-}
-
 function tierOfPickInRound(pir) {
   if (!pir) return null;
   if (pir <= 4) return "Early";
@@ -5980,9 +5956,6 @@ function pickValueWithFallback(picksMap, season, round) {
   }
   return null;
 }
-function lookupPickValue(snap, season, round) {
-  return snap ? avgPickValueFromMap(snap.picks, season, round) : null;
-}
 
 // KTC-style trade fairness. KTC doesn't compare raw value sums: each piece
 // carries a hidden "raw adjustment" (10-42.4% of its value, exponential in
@@ -6856,28 +6829,6 @@ function renderTradePlayerLine(pid, players) {
     line.appendChild(el("span", { class: "trade-player" }, "Player " + pid));
   }
   return line;
-}
-
-// Look up which player was actually drafted with a traded pick.
-// dp: { season, round, roster_id } where roster_id is the original slot owner.
-function resolvePickToPlayer(dp, allSeasons, players) {
-  const season = allSeasons.find(s => s.season === dp.season);
-  if (!season) return null;
-  // Use the first chronologically-created complete draft that has enough rounds and any picks.
-  const draft = season.drafts
-    .filter(d => d.status === "complete" && (d.rounds || 0) >= dp.round && d.picks && d.picks.length)
-    .slice()
-    .sort((a, b) => (a.created || 0) - (b.created || 0))[0];
-  if (!draft) return null;
-  // Find the draft slot belonging to the original roster
-  const slotEntry = Object.entries(draft.slot_to_roster_id || {})
-    .find(([, rid]) => rid === dp.roster_id);
-  if (!slotEntry) return null;
-  const slot = parseInt(slotEntry[0], 10);
-  const pick = draft.picks.find(p => p.round === dp.round && p.draft_slot === slot);
-  if (!pick) return null;
-  const player = players[pick.player_id];
-  return { pick, player };
 }
 
 function renderTradePickLine(dp, allSeasons, players, tradeCreated) {

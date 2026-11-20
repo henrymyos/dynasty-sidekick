@@ -36,9 +36,19 @@ const setJson = (k, v) => redis(["SET", k, JSON.stringify(v)]);
 function isoDate(ms = Date.now()) { return new Date(ms).toISOString().slice(0, 10); }
 function daysBetween(a, b) { return (Date.parse(b) - Date.parse(a)) / 86400000; }
 
+// Origin of this deployment for the snapshot fetches. Never x-forwarded-host:
+// a client-chosen host would let anyone feed fake values into the stored series.
+// The production domain comes from Vercel's system env; the Host header (which
+// Vercel only routes to this project's own domains) is the fallback, e.g. vercel dev.
+export function snapshotBase(env, hostHeader) {
+  if (env.VERCEL_PROJECT_PRODUCTION_URL) return "https://" + env.VERCEL_PROJECT_PRODUCTION_URL;
+  const host = hostHeader || "";
+  if (!/^[a-z0-9.-]+(:\d+)?$/i.test(host)) throw new Error("bad host");
+  return (/^(localhost|127\.0\.0\.1)(:|$)/.test(host) ? "http://" : "https://") + host;
+}
+
 // Build today's snapshot from the live feeds served by this deployment.
-async function takeSnapshot(host) {
-  const base = (host.startsWith("localhost") ? "http://" : "https://") + host;
+async function takeSnapshot(base) {
   const [ktcRes, flockRes] = await Promise.all([
     fetch(base + "/api/ktc-dynasty", { headers: { accept: "application/json" } }),
     fetch(base + "/api/flock-live", { headers: { accept: "application/json" } }).catch(() => null),
@@ -56,11 +66,11 @@ async function takeSnapshot(host) {
   return { date: isoDate(), ktc, flock, picks };
 }
 
-async function ensureFresh(host) {
+async function ensureFresh(hostHeader) {
   let index = (await getJson(INDEX_KEY)) || [];
   const latest = index[index.length - 1];
   if (latest && daysBetween(latest, isoDate()) < STALE_DAYS) return index;
-  const snap = await takeSnapshot(host);
+  const snap = await takeSnapshot(snapshotBase(process.env, hostHeader));
   if (Object.keys(snap.ktc).length < 100) throw new Error("snapshot looks empty");
   await setJson(SNAP_KEY(snap.date), snap);
   index = index.filter(d => d !== snap.date).concat([snap.date]).sort();
@@ -78,8 +88,7 @@ export default async function handler(req, res) {
     return;
   }
   try {
-    const host = req.headers["x-forwarded-host"] || req.headers.host || "";
-    const index = await ensureFresh(host);
+    const index = await ensureFresh(req.headers.host);
     const dates = index.slice(-WEEKS);
     const snaps = await Promise.all(dates.map(d => getJson(SNAP_KEY(d))));
     // Per-player series aligned to `dates` (null where a snapshot lacks the player).

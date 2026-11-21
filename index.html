@@ -1512,6 +1512,10 @@
     border-top: 1px solid var(--border);
     margin-top: 40px;
   }
+  /* Respect the OS "reduce motion" setting: no pulsing dots or smooth scrolls. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  }
 </style>
 </head>
 <body>
@@ -3354,7 +3358,7 @@ function tcFinderCard(M, t, label) {
       t.q = { [me]: "", [d.partnerUid]: "" };
       t.finderOpen = false;
       render();
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     });
     list.appendChild(row);
   });

@@ -1,0 +1,77 @@
+/* Henry's apps: shared dark design tokens v1 (2026-11-23).
+   Source: Nova's UI audit 2026-11-21, section 3. Dark only, no light theme.
+   Copy this file into an app and load it before the app's own CSS.
+   Pick the accent with <html data-family="disc|fantasy|learn|film|tools">; no attribute = disc teal. */
+:root {
+  /* Type. Display fonts stay per app (Oswald, Fraunces, Barlow Condensed). */
+  --font-ui: Inter, Geist, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-12: 12px;  /* labels, captions: the floor, nothing smaller */
+  --fs-14: 14px;  /* secondary body, tabs */
+  --fs-16: 16px;  /* body, buttons */
+  --fs-20: 20px;  /* card titles */
+  --fs-24: 24px;
+  --fs-32: 32px;  /* stat numbers, page titles on phone */
+  --fs-44: 44px;  /* hero */
+  --lh-body: 1.5;
+  --lh-head: 1.15;
+  --ls-head: -0.02em;
+  --ls-label: 0.08em;
+
+  /* Spacing, 4-px grid. */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-6: 24px; --sp-8: 32px; --sp-12: 48px; --sp-16: 64px;
+  --pad-card: var(--sp-4);   /* 16 phone, 24 desktop (below) */
+  --gap-section: var(--sp-6);
+  --gap-tile: var(--sp-3);
+
+  /* Radii. */
+  --r-sm: 8px;    /* inputs, chips */
+  --r-md: 12px;   /* buttons, tiles */
+  --r-lg: 16px;   /* cards */
+  --r-xl: 24px;   /* sheets, hero panels */
+  --r-pill: 999px;
+
+  /* Surfaces and text. */
+  --bg: #0B0D12;
+  --surface-1: #12151C;
+  --surface-2: #1A1E27;
+  --surface-3: #232834;
+  --line: rgba(255, 255, 255, .08);
+  --line-strong: rgba(255, 255, 255, .16);
+  --ink: #ECEEF2;
+  --muted: #A3ABB8;   /* passes AA on every surface */
+  --faint: #6E7583;   /* decoration only, never text you must read */
+  --down: #FF6B6B;    /* negative deltas; 6:1 on surface-2 */
+
+  /* Elevation: a hairline top highlight; the drop shadow only on raised cards. */
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .04);
+  --shadow-raise: inset 0 1px 0 rgba(255, 255, 255, .04), 0 8px 24px rgba(0, 0, 0, .35);
+
+  /* Motion. */
+  --dur-press: 120ms;   /* press, scale .97 */
+  --dur-state: 200ms;   /* hover, state */
+  --dur-enter: 320ms;   /* enter, sheets */
+  --ease: cubic-bezier(.2, .8, .2, 1);
+
+  /* Touch and focus. */
+  --tap: 44px;
+  --focus-ring: 2px solid var(--accent);
+  --focus-offset: 2px;
+
+  /* Accent: disc golf teal by default. */
+  --accent: #2DD4A7;
+  --accent-ink: #04140F;
+  --accent-soft: rgba(45, 212, 167, .12);
+
+  color-scheme: dark;
+}
+@media (min-width: 768px) { :root { --pad-card: var(--sp-6); } }
+@media (prefers-reduced-motion: reduce) { :root { --dur-press: 0ms; --dur-state: 0ms; --dur-enter: 0ms; } }
+
+/* Accent families: one accent per app family. */
+[data-family="disc"]    { --accent: #2DD4A7; --accent-ink: #04140F; --accent-soft: rgba(45, 212, 167, .12); }
+[data-family="fantasy"] { --accent: #5B8CFF; --accent-ink: #050B1C; --accent-soft: rgba(91, 140, 255, .14); }
+[data-family="learn"]   { --accent: #FF9F6E; --accent-ink: #1E0E04; --accent-soft: rgba(255, 159, 110, .14); }
+[data-family="film"]    { --accent: #F0313A; --accent-ink: #FFFFFF; --accent-soft: rgba(240, 49, 58, .14); }
+[data-family="tools"]   { --accent: #FFC627; --accent-ink: #1A1300; --accent-soft: rgba(255, 198, 39, .12); }

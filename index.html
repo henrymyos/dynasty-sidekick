@@ -378,26 +378,6 @@
     vertical-align: middle;
     margin-right: 8px;
   }
-  .color-row {
-    display: grid;
-    grid-template-columns: 28px 110px 1fr;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 10px;
-    border-radius: var(--r-sm);
-  }
-  .color-row:hover { background: var(--panel-2); }
-  .color-row input {
-    background: var(--panel-2);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 10px;
-    font-size: 13px;
-    font-family: inherit;
-    width: 90px;
-  }
-  .color-row input:focus { outline: none; border-color: var(--accent); }
   tr.pos-total td { font-weight: 600; border-top: 1px solid var(--border); }
   tr.pos-sub td:first-child {
     padding-left: 28px;
@@ -554,24 +534,6 @@
     font-size: 12px;
     margin-top: 4px;
   }
-  .roster-section { margin-bottom: 12px; }
-  .roster-section h4 {
-    margin: 0 0 6px;
-    font-size: 12px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-weight: 600;
-  }
-  .roster-list { display: flex; flex-wrap: wrap; gap: 4px; }
-  .roster-chip {
-    background: var(--panel-2);
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    color: var(--text);
-  }
-  .roster-chip.is-rookie { color: var(--accent); border: 1px solid rgba(91, 140, 255,0.4); }
   /* Live Draft roster: 4 position columns of Sleeper-style player tiles */
   .roster-pos-grid {
     display: grid;
@@ -635,27 +597,13 @@
   /* ---- Trade Analyzer ---- */
   .ta-controls { align-items: center; flex-wrap: wrap; }
   .ta-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-  .ta-summary .stat-grid { margin-top: 8px; }
   .ta-note { color: var(--muted); font-size: 12px; margin: 10px 0 0; line-height: 1.45; }
   .ta-h3 { margin: 14px 0 6px; font-size: 14px; }
   .ta-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   .ta-table th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 4px 6px; }
   .ta-table td { padding: 5px 6px; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
   .draft-pill.ta-fair { background: rgba(91, 140, 255,0.15); color: var(--accent); }
-  .ta-row { display: grid; grid-template-columns: 22px minmax(0,1fr) auto; gap: 8px; align-items: center; width: 100%;
-    padding: 7px 8px; margin: 2px 0; border-radius: var(--r-sm); border: 1px solid transparent; background: transparent;
-    color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
-  .ta-row:hover { background: var(--panel-2); }
-  .ta-row.on { background: rgba(91, 140, 255,0.12); border-color: rgba(91, 140, 255,0.35); }
-  .ta-check { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; color: var(--accent); }
-  .ta-row.on .ta-check { border-color: var(--accent); background: rgba(91, 140, 255,0.2); }
-  .ta-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ta-meta { color: var(--muted); font-size: 12px; }
-  .ta-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-  .ta-val small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
-  .ta-clear { margin-top: 12px; }
   /* ---- Trade Calculator (Flock-style) ---- */
-  .tc-clear { margin-left: auto; }
   .tc-top { padding-top: 10px; }
   .tc-verdict { text-align: center; font-weight: 700; font-size: 16px; margin: 2px 0 10px; }
   .tc-verdict.pre { color: var(--muted); font-weight: 500; font-size: 14px; }
@@ -888,13 +836,6 @@
     color: var(--text);
   }
   .card-lede strong { color: var(--accent); }
-  .lede-link {
-    cursor: pointer;
-    border-bottom: 1px dashed transparent;
-    transition: border-color var(--dur-state) var(--ease);
-  }
-  .lede-link:hover { border-bottom-color: var(--accent); }
-  .lede-link:hover strong { text-decoration: underline; }
 
   /* Lightweight modal for the category breakdown */
   .modal-overlay {
